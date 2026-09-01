@@ -38,7 +38,12 @@
       modified: now,
       width: defaults.width || 800,
       height: Math.round((defaults.width || 800) * 1.4),
-      paper: { style: defaults.style || 'lines', spacing: defaults.spacing || 32, color: defaults.color || '#ffffff' },
+      paper: {
+        style: defaults.style || 'lines',
+        spacing: defaults.spacing || 32,
+        color: defaults.color || '#ffffff',
+        layout: defaults.layout || 'page'
+      },
       view: null,          // saved {x,y,s} viewport
       items: []            // strokes / text / images, in z-order
     };

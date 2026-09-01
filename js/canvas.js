@@ -88,61 +88,73 @@
 
   Renderer.prototype.drawPaper = function (ctx, note, viewRect) {
     const styles = getComputedStyle(document.documentElement);
-    const outside = styles.getPropertyValue('--canvas-outside').trim() || '#e6e6ec';
+    const infinite = (note.paper.layout || 'page') === 'infinite';
+    const paperColor = note.paper.color || '#ffffff';
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = outside;
+    ctx.fillStyle = infinite ? paperColor : (styles.getPropertyValue('--canvas-outside').trim() || '#e6e6ec');
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
     ctx.restore();
 
-    const page = { x: 0, y: 0, w: note.width, h: note.height };
-    ctx.save();
-    ctx.shadowColor = 'rgba(20,20,40,0.25)';
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = note.paper.color || '#ffffff';
-    ctx.fillRect(page.x, page.y, page.w, page.h);
-    ctx.restore();
+    let bounds;
+    if (infinite) {
+      bounds = viewRect;
+    } else {
+      const page = { x: 0, y: 0, w: note.width, h: note.height };
+      ctx.save();
+      ctx.shadowColor = 'rgba(20,20,40,0.25)';
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = paperColor;
+      ctx.fillRect(page.x, page.y, page.w, page.h);
+      ctx.restore();
+      bounds = page;
+    }
 
     const style = note.paper.style || 'blank';
     if (style === 'blank') return;
     const spacing = note.paper.spacing || 32;
-    if (spacing * this.t.s < 3) return; // rules would be sub-pixel mush when zoomed far out
+    // Skip rules that would be sub-pixel mush (dots earlier: unbounded grids get big).
+    if (spacing * this.t.s < (style === 'dots' ? 6 : 3)) return;
     // Rule color adapts to paper lightness.
-    const c = note.paper.color || '#ffffff';
-    const rgb = [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
+    const rgb = [parseInt(paperColor.slice(1, 3), 16), parseInt(paperColor.slice(3, 5), 16), parseInt(paperColor.slice(5, 7), 16)];
     const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
     const rule = lum > 0.5 ? 'rgba(64,105,180,0.20)' : 'rgba(255,255,255,0.16)';
     ctx.save();
-    ctx.beginPath();
-    ctx.rect(page.x, page.y, page.w, page.h);
-    ctx.clip();
+    if (!infinite) {
+      ctx.beginPath();
+      ctx.rect(bounds.x, bounds.y, bounds.w, bounds.h);
+      ctx.clip();
+    }
     ctx.strokeStyle = rule;
     ctx.fillStyle = rule;
     ctx.lineWidth = 1 / this.t.s;
 
-    const y0 = Math.max(page.y + spacing, Math.floor(viewRect.y / spacing) * spacing);
-    const y1 = Math.min(page.y + page.h, viewRect.y + viewRect.h);
+    const xa = Math.max(bounds.x, viewRect.x), xb = Math.min(bounds.x + bounds.w, viewRect.x + viewRect.w);
+    const ya = Math.max(bounds.y, viewRect.y), yb = Math.min(bounds.y + bounds.h, viewRect.y + viewRect.h);
+    let x0 = Math.floor(xa / spacing) * spacing;
+    let y0 = Math.floor(ya / spacing) * spacing;
+    if (!infinite) { x0 = Math.max(x0, spacing); y0 = Math.max(y0, spacing); }
+
     if (style === 'lines' || style === 'grid') {
       ctx.beginPath();
-      for (let y = y0; y <= y1; y += spacing) { ctx.moveTo(page.x, y); ctx.lineTo(page.x + page.w, y); }
+      for (let y = y0; y <= yb; y += spacing) { ctx.moveTo(xa, y); ctx.lineTo(xb, y); }
       ctx.stroke();
     }
     if (style === 'grid') {
       ctx.beginPath();
-      for (let x = page.x + spacing; x < page.x + page.w; x += spacing) {
-        ctx.moveTo(x, Math.max(page.y, viewRect.y)); ctx.lineTo(x, y1);
-      }
+      for (let x = x0; x <= xb; x += spacing) { ctx.moveTo(x, ya); ctx.lineTo(x, yb); }
       ctx.stroke();
     }
     if (style === 'dots') {
       const r = 1.4;
-      for (let y = y0; y <= y1; y += spacing) {
-        for (let x = page.x + spacing; x < page.x + page.w; x += spacing) {
-          ctx.beginPath();
+      ctx.beginPath();
+      for (let y = y0; y <= yb; y += spacing) {
+        for (let x = x0; x <= xb; x += spacing) {
+          ctx.moveTo(x + r, y);
           ctx.arc(x, y, r, 0, Math.PI * 2);
-          ctx.fill();
         }
       }
+      ctx.fill();
     }
     ctx.restore();
   };
@@ -308,8 +320,20 @@
   };
 
   Renderer.prototype.thumbnail = async function (note) {
-    const h = Math.min(note.height, note.width * 1.25);
-    const canvas = await this.exportCanvas(note, { x: 0, y: 0, w: note.width, h }, 260);
+    let rect;
+    if ((note.paper.layout || 'page') === 'infinite') {
+      let bb = null;
+      for (const it of note.items) bb = U.unionBBox(bb, BN.itemBBox(it));
+      if (bb) {
+        const w = Math.max(bb.w + 48, 320);
+        rect = { x: bb.x - 24, y: bb.y - 24, w, h: Math.max(160, Math.min(bb.h + 48, w * 1.3)) };
+      } else {
+        rect = { x: 0, y: 0, w: 800, h: 1000 };
+      }
+    } else {
+      rect = { x: 0, y: 0, w: note.width, h: Math.min(note.height, note.width * 1.25) };
+    }
+    const canvas = await this.exportCanvas(note, rect, 260);
     try { return canvas.toDataURL('image/jpeg', 0.8); } catch (e) { return null; }
   };
 

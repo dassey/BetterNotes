@@ -21,6 +21,9 @@
   let touchTap = null;          // multi-finger tap candidate (2 = undo, 3 = redo)
   let lastPenAt = 0;            // pen-priority palm rejection window
   let cropState = null;         // active image-crop session
+  let contentBB = null;         // cached union bbox of all items
+
+  const isInfinite = () => !!note && (note.paper.layout || 'page') === 'infinite';
   let el = {};                  // dom refs
 
   const MIN_S = 0.02, MAX_S = 40;
@@ -73,6 +76,7 @@
     el.screen.hidden = false;
     renderer.resize();
     wrapRect = null;
+    updateExtent();
     if (note.view && note.view.s) {
       renderer.t = { ...note.view };
       clampT(renderer.t);
@@ -117,8 +121,18 @@
 
   function markDirty() {
     if (!note) return;
-    autoExtendPage();
+    updateExtent();
     autosave();
+  }
+
+  // Tracks the content bounding box; on fixed pages also grows the page height.
+  function updateExtent() {
+    let bb = null;
+    for (const it of note.items) bb = U.unionBBox(bb, BN.itemBBox(it));
+    contentBB = bb;
+    if (!isInfinite() && bb && bb.y + bb.h > note.height - 140) {
+      note.height = Math.round(bb.y + bb.h + 420);
+    }
   }
 
   /* =================== view transform =================== */
@@ -131,11 +145,23 @@
 
   function clampT(t) {
     t.s = U.clamp(t.s, MIN_S, MAX_S);
-    const pw = note.width * t.s, ph = note.height * t.s;
-    const mx = 40;
-    if (pw <= renderer.w - mx * 2) t.x = (renderer.w - pw) / 2;
-    else t.x = U.clamp(t.x, renderer.w - pw - mx, mx);
-    t.y = U.clamp(t.y, Math.min(60, renderer.h - ph - 260), 60);
+    const s = t.s;
+    let r; // world rect the view may roam over
+    if (isInfinite()) {
+      // Always leave more than a screenful of empty paper past the content,
+      // so the canvas never presents a wall — it grows as you use it.
+      const pad = Math.max(1500, renderer.w / s, renderer.h / s);
+      const base = contentBB || { x: 0, y: 0, w: note.width, h: note.height };
+      r = { x: base.x - pad, y: base.y - pad, w: base.w + pad * 2, h: base.h + pad * 2 };
+    } else {
+      r = { x: 0, y: 0, w: note.width, h: note.height };
+      if (contentBB) r = U.unionBBox(r, contentBB);
+      r = { x: r.x - 40 / s, y: r.y - 60 / s, w: r.w + 80 / s, h: r.h + 320 / s };
+    }
+    if (r.w * s <= renderer.w) t.x = (renderer.w - r.w * s) / 2 - r.x * s;
+    else t.x = U.clamp(t.x, renderer.w - (r.x + r.w) * s, -r.x * s);
+    if (r.h * s <= renderer.h) t.y = (renderer.h - r.h * s) / 2 - r.y * s;
+    else t.y = U.clamp(t.y, renderer.h - (r.y + r.h) * s, -r.y * s);
   }
 
   const sharpRender = U.debounce(() => { if (note) renderAll(); }, 150);
@@ -157,14 +183,6 @@
     el.textLayer.style.transform = `translate(${t.x}px, ${t.y}px) scale(${t.s})`;
   }
 
-  function autoExtendPage() {
-    let bottom = 0;
-    for (const it of note.items) {
-      const bb = BN.itemBBox(it);
-      bottom = Math.max(bottom, bb.y + bb.h);
-    }
-    if (bottom > note.height - 140) note.height = Math.round(bottom + 420);
-  }
 
   /* =================== undo =================== */
 
@@ -517,11 +535,12 @@
 
   function createTextAt(w) {
     const size = 18;
+    const inf = isInfinite();
     const item = {
       id: U.uid(), type: 'text',
-      x: U.clamp(w.x, 0, note.width - 140),
-      y: Math.max(0, w.y - size * 0.75),
-      w: U.clamp(note.width - w.x - 24, 140, 420),
+      x: inf ? w.x : U.clamp(w.x, 0, note.width - 140),
+      y: inf ? w.y - size * 0.75 : Math.max(0, w.y - size * 0.75),
+      w: inf ? 340 : U.clamp(note.width - w.x - 24, 140, 420),
       h: size * 1.5, size,
       color: S.get('ink.penColor'),
       text: ''
@@ -536,14 +555,17 @@
   async function insertImageBlob(blob) {
     try {
       const bmp = await createImageBitmap(blob);
-      const maxW = note.width * 0.62;
+      const inf = isInfinite();
+      const maxW = inf ? 560 : note.width * 0.62;
       const w = Math.min(maxW, bmp.width);
       const h = w * (bmp.height / bmp.width);
       const view = renderer.viewWorldRect(0);
+      const cx = view.x + view.w / 2 - w / 2;
+      const cy = view.y + view.h / 2 - h / 2;
       const item = {
         id: U.uid(), type: 'image',
-        x: U.clamp(view.x + view.w / 2 - w / 2, 0, Math.max(0, note.width - w)),
-        y: Math.max(12, view.y + view.h / 2 - h / 2),
+        x: inf ? cx : U.clamp(cx, 0, Math.max(0, note.width - w)),
+        y: inf ? cy : Math.max(12, cy),
         w, h, blob
       };
       renderer.images.set(item.id, { ready: true, bmp });
@@ -1622,6 +1644,12 @@
 
   function openPaperOptions(anchor) {
     openPopover(anchor, (pop) => {
+      pop.appendChild(segmentedRow([['infinite', 'Infinite'], ['page', 'Page']], note.paper.layout || 'page', (v) => {
+        note.paper.layout = v;
+        updateExtent();
+        clampT(renderer.t);
+        paperChanged();
+      }));
       const styles = [['lines', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['blank', 'Blank']];
       const seg = document.createElement('div');
       seg.className = 'segmented';
@@ -1688,7 +1716,9 @@
     try {
       commitFocusedText();
       const rect = whole
-        ? { x: 0, y: 0, w: note.width, h: note.height }
+        ? (isInfinite() && contentBB
+          ? { x: contentBB.x - 40, y: contentBB.y - 40, w: contentBB.w + 80, h: contentBB.h + 80 }
+          : { x: 0, y: 0, w: note.width, h: note.height })
         : renderer.viewWorldRect(0);
       const px = Math.min(2048, Math.max(1200, Math.round(rect.w * 2)));
       const canvas = await renderer.exportCanvas(note, rect, px);

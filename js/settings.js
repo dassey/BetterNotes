@@ -78,6 +78,11 @@
 
     { section: 'Paper (new notes)' },
     {
+      key: 'paper.layout', label: 'Canvas', type: 'select', def: 'infinite',
+      options: [['infinite', 'Infinite'], ['page', 'Fixed page']],
+      desc: 'Infinite grows in every direction as you write. Any note can be switched later from its paper menu.'
+    },
+    {
       key: 'paper.style', label: 'Paper style', type: 'select', def: 'lines',
       options: [['lines', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['blank', 'Blank']]
     },
@@ -86,7 +91,7 @@
     {
       key: 'paper.width', label: 'Page width', type: 'select', def: '800',
       options: [['600', 'Narrow'], ['800', 'Standard'], ['1000', 'Wide']],
-      desc: 'Logical page width for new notes. Existing notes keep theirs.'
+      desc: 'Sheet width for new Fixed-page notes (Infinite canvas has no width).'
     },
 
     { section: 'Appearance' },
