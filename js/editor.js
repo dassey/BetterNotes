@@ -341,6 +341,38 @@
     ];
   }
 
+  // Single image → side handles stretch one axis (aspect-free);
+  // single text → left/right handles adjust wrap width.
+  function stretchTarget() {
+    const items = selectedItems();
+    if (items.length !== 1) return null;
+    const it = items[0];
+    if (it.type === 'image') return { it, axes: 'xy' };
+    if (it.type === 'text') return { it, axes: 'x' };
+    return null;
+  }
+
+  function edgeHandles(bb, axes) {
+    const out = [];
+    if (axes.includes('x')) {
+      out.push({ x: bb.x, y: bb.y + bb.h / 2, axis: 'x', dir: -1 });
+      out.push({ x: bb.x + bb.w, y: bb.y + bb.h / 2, axis: 'x', dir: 1 });
+    }
+    if (axes.includes('y')) {
+      out.push({ x: bb.x + bb.w / 2, y: bb.y, axis: 'y', dir: -1 });
+      out.push({ x: bb.x + bb.w / 2, y: bb.y + bb.h, axis: 'y', dir: 1 });
+    }
+    return out;
+  }
+
+  function hitEdgeHandle(s, st) {
+    for (const h of edgeHandles(selection.bbox, st.axes)) {
+      const p = renderer.screenFromWorld(h.x, h.y);
+      if (U.dist(p.x, p.y, s.x, s.y) < 16) return h;
+    }
+    return null;
+  }
+
   function drawOverlays(ctx) {
     if (!selection || !selection.bbox) return;
     const t = renderer.t;
@@ -361,6 +393,17 @@
       ctx.arc(h.x, h.y, hs, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+    }
+    const st = stretchTarget();
+    if (st) {
+      const a = 7 / t.s;
+      ctx.fillStyle = '#ffffff';
+      for (const h of edgeHandles(bb, st.axes)) {
+        ctx.beginPath();
+        ctx.rect(h.x - a, h.y - a, a * 2, a * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -861,6 +904,19 @@
         startLiveLoop();
         return;
       }
+      const st = stretchTarget();
+      if (st) {
+        const eh = hitEdgeHandle(s, st);
+        if (eh) {
+          action = {
+            kind: 'stretchSel', pid: e.pointerId, axis: eh.axis, dir: eh.dir, itemId: st.it.id,
+            orig: { x: st.it.x, y: st.it.y, w: st.it.w, h: st.it.h }, start: w, cur: null
+          };
+          prepareSelectionDragRender();
+          startLiveLoop();
+          return;
+        }
+      }
       if (U.bboxContains(selection.bbox, w.x, w.y)) {
         action = { kind: 'moveSel', start: w, dx: 0, dy: 0, pid: e.pointerId, started: false };
         return;
@@ -1002,6 +1058,40 @@
         const w = renderer.worldFromScreen(s.x, s.y);
         action.f = U.clamp(U.dist(w.x, w.y, action.anchor.x, action.anchor.y) / action.startDist, 0.05, 20);
         setTextScale(action.anchor, action.f);
+        break;
+      }
+      case 'stretchSel': {
+        if (e.pointerId !== action.pid) return;
+        const w = renderer.worldFromScreen(s.x, s.y);
+        const it = byId(action.itemId);
+        if (!it) return;
+        const o = action.orig;
+        const minSz = it.type === 'text' ? 60 : 16;
+        const r = { ...o };
+        if (action.axis === 'x') {
+          const dx = w.x - action.start.x;
+          if (action.dir > 0) {
+            r.w = Math.max(minSz, o.w + dx);
+          } else {
+            const nx = Math.min(o.x + dx, o.x + o.w - minSz);
+            r.w = o.x + o.w - nx;
+            r.x = nx;
+          }
+        } else {
+          const dy = w.y - action.start.y;
+          if (action.dir > 0) {
+            r.h = Math.max(minSz, o.h + dy);
+          } else {
+            const ny = Math.min(o.y + dy, o.y + o.h - minSz);
+            r.h = o.y + o.h - ny;
+            r.y = ny;
+          }
+        }
+        action.cur = r;
+        if (it.type === 'text') {
+          const div = el.textLayer.querySelector(`[data-id="${it.id}"]`);
+          if (div) { div.style.left = r.x + 'px'; div.style.width = r.w + 'px'; }
+        }
         break;
       }
       case 'cropDrag': {
@@ -1250,6 +1340,30 @@
         renderAll();
         break;
       }
+      case 'stretchSel': {
+        if (e.pointerId !== action.pid) return;
+        const a = action; action = null;
+        const it = byId(a.itemId);
+        if (it && a.cur) {
+          const before = { ...a.orig };
+          const after = { x: a.cur.x, y: a.cur.y, w: a.cur.w, h: a.cur.h };
+          Object.assign(it, after);
+          if (it.type === 'text') {
+            const div = el.textLayer.querySelector(`[data-id="${it.id}"]`);
+            if (div) {
+              div.style.left = it.x + 'px';
+              div.style.width = it.w + 'px';
+              it.h = div.offsetHeight;
+              after.h = it.h;
+            }
+          }
+          delete it._bb;
+          pushOp(opFields(it.id, before, after));
+          updateSelectionBBox();
+        }
+        renderAll();
+        break;
+      }
       case 'cropDrag':
         if (e.pointerId !== action.pid) return;
         action = null;
@@ -1286,8 +1400,10 @@
       if (action.kind === 'erase' && action.entries.length) {
         pushOp(opErase(action.entries));
       }
+      const wasStretch = action.kind === 'stretchSel';
       action = null;
       clearTextTempTransforms();
+      if (wasStretch) rebuildTextLayer();
       renderAll();
     } else if (action && (action.kind === 'pinch' || action.kind === 'pan') && touchPointers().length === 0) {
       action = null;
@@ -1348,7 +1464,7 @@
     requestAnimationFrame(liveFrame);
   }
   function liveFrame() {
-    if (!note || !action || !['draw', 'erase', 'lasso', 'moveSel', 'scaleSel'].includes(action.kind)) {
+    if (!note || !action || !['draw', 'erase', 'lasso', 'moveSel', 'scaleSel', 'stretchSel'].includes(action.kind)) {
       liveRunning = false;
       if (note) { renderer.renderLive(cropState ? drawCropOverlay : drawOverlays); positionSelActions(); }
       return;
@@ -1408,6 +1524,18 @@
         }
         ctx.restore();
         drawOverlays(ctx);
+      } else if (action.kind === 'stretchSel') {
+        const it = byId(action.itemId);
+        const r = action.cur || action.orig;
+        if (it && it.type === 'image') {
+          renderer.drawItem(ctx, { ...it, x: r.x, y: r.y, w: r.w, h: r.h });
+        }
+        const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4f7cff';
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 1.5 / t.s;
+        ctx.setLineDash([6 / t.s, 5 / t.s]);
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.setLineDash([]);
       } else if (action.kind === 'scaleSel') {
         ctx.save();
         ctx.translate(action.anchor.x, action.anchor.y);
