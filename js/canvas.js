@@ -160,7 +160,8 @@
         ctx.restore();
       } else {
         ctx.fillStyle = item.color;
-        ctx.fill(Ink.outlinePath(item.points, item.size, item.pressure ?? 0.65));
+        const taper = BN.Settings && BN.Settings.get('input.taper') !== false && !item.snap;
+        ctx.fill(Ink.outlinePath(item.points, item.size, item.pressure ?? 0.65, { taper }));
       }
     } else if (item.type === 'image') {
       const entry = this.ensureImage(item);

@@ -18,7 +18,8 @@
   let wrapRect = null;
   let autosave = null;
   let lastThumbAt = 0;
-  let touchTap = null;          // two-finger-tap undo candidate
+  let touchTap = null;          // multi-finger tap candidate (2 = undo, 3 = redo)
+  let lastPenAt = 0;            // pen-priority palm rejection window
   let el = {};                  // dom refs
 
   const MIN_S = 0.15, MAX_S = 6;
@@ -49,7 +50,7 @@
     makeAutosave();
     document.addEventListener('bn:settings-changed', (e) => {
       if (e.detail.key === 'storage.autosaveMs') makeAutosave();
-      if (e.detail.key.startsWith('appearance.') && note) renderAll();
+      if ((e.detail.key.startsWith('appearance.') || e.detail.key === 'input.taper') && note) renderAll();
       updateToolIndicators();
     });
     document.addEventListener('bn:image-ready', () => { if (note) renderAll(); });
@@ -586,6 +587,7 @@
 
     const isTouch = e.pointerType === 'touch';
     const pencilOnly = S.get('input.pencilOnly');
+    if (e.pointerType === 'pen') lastPenAt = performance.now();
 
     if (isTouch) {
       const touches = touchPointers();
@@ -593,8 +595,10 @@
         maybeStartPinch(e);
         return;
       }
+      if (touches.length === 3 && touchTap) { touchTap.count = 3; return; }
       if (touches.length > 2) return;
-      if (pencilOnly || tool === 'hand') { startPan(); return; }
+      const penRecently = performance.now() - lastPenAt < 700;
+      if (pencilOnly || tool === 'hand' || penRecently) { startPan(); return; }
       // else: finger draws with the current tool
     }
     if (e.pointerType === 'pen' && action && (action.kind === 'pan' || action.kind === 'pinch')) {
@@ -615,7 +619,7 @@
       return;
     }
     const [a, b] = touches;
-    touchTap = { t0: performance.now(), moved: 0 };
+    touchTap = { t0: performance.now(), moved: 0, count: 2 };
     action = {
       kind: 'pinch',
       ids: [touchKey(a), touchKey(b)],
@@ -641,7 +645,7 @@
       case 'high':
         startStroke(e, w); break;
       case 'eraser':
-        action = { kind: 'erase', removed: [], cursor: w, pid: e.pointerId };
+        action = { kind: 'erase', entries: [], cursor: w, pid: e.pointerId };
         eraseAt(w);
         startLiveLoop();
         break;
@@ -667,20 +671,18 @@
     };
     if (isHigh) item.opacity = S.get('ink.highOpacity');
     const smoother = Ink.createSmoother(S.get('input.smoothing'));
-    const first = smoother.push({ x: w.x, y: w.y, p: normPressure(e) });
+    const realP = e.pointerType === 'pen' && e.pressure > 0;
+    const first = smoother.push({ x: w.x, y: w.y, p: realP ? e.pressure : 0.62 });
     item.points.push(first);
     action = {
       kind: 'draw', item, smoother, pid: e.pointerId, byTouch: e.pointerType === 'touch',
       t0: performance.now(), lastMoveT: performance.now(), lastPt: first,
+      sim: S.get('input.simPressure') !== false, simP: 0.62,
       predicted: [], snapped: null, snapCheckAt: 0
     };
     startLiveLoop();
   }
 
-  function normPressure(e) {
-    if (e.pointerType === 'pen' && e.pressure > 0) return e.pressure;
-    return 0.5;
-  }
 
   function startSelect(e, w, s) {
     if (selection && selection.bbox) {
@@ -748,6 +750,7 @@
   }
 
   function onMove(e) {
+    if (e.pointerType === 'pen') lastPenAt = performance.now();
     const p = pointers.get(e.pointerId);
     if (!p) return;
     const s = localXY(e);
@@ -765,7 +768,17 @@
         for (const ev of evs) {
           const l = localXY(ev);
           const w = renderer.worldFromScreen(l.x, l.y);
-          const pt = action.smoother.push({ x: w.x, y: w.y, p: normPressure(ev) });
+          let p;
+          if (ev.pointerType === 'pen' && ev.pressure > 0) {
+            p = ev.pressure;
+          } else if (action.sim) {
+            const sp = Math.min(1, U.dist(w.x, w.y, action.lastPt.x, action.lastPt.y) / (action.item.size * 4));
+            action.simP += ((1 - 0.78 * sp) - action.simP) * Math.min(1, sp * 0.35 + 0.06);
+            p = U.clamp(action.simP, 0.18, 0.95);
+          } else {
+            p = 0.5;
+          }
+          const pt = action.smoother.push({ x: w.x, y: w.y, p });
           const lp = action.lastPt;
           if (U.dist(pt.x, pt.y, lp.x, lp.y) * t.s >= 1.1) {
             action.item.points.push(pt);
@@ -893,27 +906,94 @@
   }
 
   function eraseAt(w) {
+    const precise = (S.get('ink.eraserMode') || 'precise') === 'precise';
     const r = (S.get('ink.eraserSize') / 2) / renderer.t.s;
-    let removedAny = false;
+    let changed = false;
     for (let i = note.items.length - 1; i >= 0; i--) {
       const it = note.items[i];
       if (it.type !== 'stroke') continue;
       const bb = BN.itemBBox(it);
       if (!U.bboxContains({ x: bb.x - r, y: bb.y - r, w: bb.w + 2 * r, h: bb.h + 2 * r }, w.x, w.y)) continue;
       const hitR = r + it.size / 2;
-      let hit = false;
-      const pts = it.points;
-      if (pts.length === 1) hit = U.dist(pts[0].x, pts[0].y, w.x, w.y) < hitR;
-      for (let j = 1; !hit && j < pts.length; j++) {
-        hit = U.pointSegDist(w.x, w.y, pts[j - 1].x, pts[j - 1].y, pts[j].x, pts[j].y) < hitR;
-      }
-      if (hit) {
-        action.removed.push({ item: it, index: i });
-        note.items.splice(i, 1);
-        removedAny = true;
+      if (precise) {
+        const pts = U.resample(it.points, Math.max(1.5, Math.min(4, hitR * 0.6)));
+        const m = eraseMask(pts, w, hitR);
+        if (!m) continue;
+        const frags = splitStroke(it, pts, m.mask);
+        action.entries.push({ original: it, index: i, frags });
+        note.items.splice(i, 1, ...frags);
+        changed = true;
+      } else {
+        let hit = false;
+        const pts = it.points;
+        if (pts.length === 1) hit = U.dist(pts[0].x, pts[0].y, w.x, w.y) < hitR;
+        for (let j = 1; !hit && j < pts.length; j++) {
+          hit = U.pointSegDist(w.x, w.y, pts[j - 1].x, pts[j - 1].y, pts[j].x, pts[j].y) < hitR;
+        }
+        if (hit) {
+          action.entries.push({ original: it, index: i, frags: [] });
+          note.items.splice(i, 1);
+          changed = true;
+        }
       }
     }
-    if (removedAny) eraseRerender();
+    if (changed) eraseRerender();
+  }
+
+  function eraseMask(pts, w, hitR) {
+    let any = false;
+    const mask = new Array(pts.length).fill(false);
+    for (let j = 0; j < pts.length; j++) {
+      if (U.dist(pts[j].x, pts[j].y, w.x, w.y) < hitR) { mask[j] = true; any = true; }
+    }
+    for (let j = 1; j < pts.length; j++) {
+      if (!mask[j - 1] && !mask[j] &&
+        U.pointSegDist(w.x, w.y, pts[j - 1].x, pts[j - 1].y, pts[j].x, pts[j].y) < hitR * 0.9) {
+        mask[j - 1] = mask[j] = true;
+        any = true;
+      }
+    }
+    return any ? { mask } : null;
+  }
+
+  function splitStroke(it, pts, mask) {
+    const frags = [];
+    let run = [];
+    const flush = () => {
+      if (run.length >= 2) {
+        const f = { ...it, id: U.uid(), points: run };
+        delete f._bb;
+        frags.push(f);
+      }
+      run = [];
+    };
+    for (let j = 0; j < pts.length; j++) {
+      if (mask[j]) flush();
+      else run.push(pts[j]);
+    }
+    flush();
+    return frags;
+  }
+
+  function opErase(entries) {
+    return {
+      undo() {
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const e = entries[i];
+          if (e.frags.length) {
+            const ids = new Set(e.frags.map((f) => f.id));
+            note.items = note.items.filter((it) => !ids.has(it.id));
+          }
+          note.items.splice(Math.min(e.index, note.items.length), 0, e.original);
+        }
+      },
+      redo() {
+        for (const e of entries) {
+          const idx = note.items.findIndex((it) => it.id === e.original.id);
+          if (idx >= 0) note.items.splice(idx, 1, ...e.frags);
+        }
+      }
+    };
   }
   const eraseRerender = U.rafThrottle(() => { if (note) renderer.render(note); });
 
@@ -922,15 +1002,15 @@
     pointers.delete(e.pointerId);
     if (!p) return;
 
-    // Two-finger tap → undo.
+    // Multi-finger tap: two fingers → undo, three fingers → redo.
     if (touchTap && p.type === 'touch') {
-      const quick = performance.now() - touchTap.t0 < 300 && touchTap.moved < 14;
+      const quick = performance.now() - touchTap.t0 < 320 && touchTap.moved < 18;
       if (touchPointers().length === 0) {
         const tapInfo = touchTap;
         touchTap = null;
         if (quick && tapInfo && S.get('input.twoFingerUndo') && action && action.kind === 'pinch') {
           action = null;
-          doUndo();
+          if (tapInfo.count >= 3) doRedo(); else doUndo();
           return;
         }
       } else if (!quick) {
@@ -947,7 +1027,7 @@
       case 'erase': {
         if (e.pointerId !== action.pid) return;
         const a = action; action = null;
-        if (a.removed.length) pushOp(opRemove(a.removed.slice().sort((x, y) => x.index - y.index)));
+        if (a.entries.length) pushOp(opErase(a.entries));
         renderAll();
         break;
       }
@@ -1012,8 +1092,8 @@
   function onCancel(e) {
     pointers.delete(e.pointerId);
     if (action && action.pid === e.pointerId) {
-      if (action.kind === 'erase' && action.removed.length) {
-        pushOp(opRemove(action.removed.slice().sort((x, y) => x.index - y.index)));
+      if (action.kind === 'erase' && action.entries.length) {
+        pushOp(opErase(action.entries));
       }
       action = null;
       clearTextTempTransforms();
@@ -1031,6 +1111,7 @@
     const item = a.item;
     if (a.snapped) {
       item.points = a.snapped;
+      item.snap = true;
     } else {
       item.points = Ink.finalizePoints(item.points, S.get('input.smoothing'));
     }
@@ -1096,7 +1177,7 @@
           ctx.globalAlpha = 1;
         } else {
           ctx.fillStyle = item.color;
-          ctx.fill(Ink.outlinePath(pts, item.size, item.pressure));
+          ctx.fill(Ink.outlinePath(pts, item.size, item.pressure, { taper: S.get('input.taper') !== false && !action.snapped }));
           if (!action.snapped && action.predicted.length) {
             const lp = item.points[item.points.length - 1];
             ctx.strokeStyle = item.color;
@@ -1342,6 +1423,19 @@
         pop.appendChild(sliderRow('Size', 6, 40, 1, S.get('ink.highSize'), (v) => S.set('ink.highSize', v)));
         pop.appendChild(sliderRow('Opacity', 0.15, 0.6, 0.05, S.get('ink.highOpacity'), (v) => S.set('ink.highOpacity', v)));
       } else if (tool === 'eraser') {
+        const seg = document.createElement('div');
+        seg.className = 'segmented';
+        for (const [v, label] of [['precise', 'Precise'], ['stroke', 'Whole stroke']]) {
+          const b = document.createElement('button');
+          b.textContent = label;
+          b.classList.toggle('active', (S.get('ink.eraserMode') || 'precise') === v);
+          b.addEventListener('click', () => {
+            S.set('ink.eraserMode', v);
+            for (const sb of seg.children) sb.classList.toggle('active', sb === b);
+          });
+          seg.appendChild(b);
+        }
+        pop.appendChild(seg);
         pop.appendChild(sliderRow('Size', 6, 60, 1, S.get('ink.eraserSize'), (v) => S.set('ink.eraserSize', v)));
       }
     });

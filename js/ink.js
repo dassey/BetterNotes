@@ -62,7 +62,8 @@
   };
 
   // Variable-width outline polygon for pressure ink. Returns a closed Path2D.
-  Ink.outlinePath = function (pts, size, pressureAmount) {
+  // opts.taper thins the stroke toward both ends for a natural pen lift.
+  Ink.outlinePath = function (pts, size, pressureAmount, opts) {
     const path = new Path2D();
     if (!pts.length) return path;
     if (pts.length === 1) {
@@ -70,8 +71,28 @@
       path.arc(pts[0].x, pts[0].y, Math.max(r, 0.3), 0, Math.PI * 2);
       return path;
     }
-    // Per-point direction = average of adjacent segment directions.
     const n = pts.length;
+    const arc = new Array(n);
+    arc[0] = 0;
+    for (let i = 1; i < n; i++) {
+      arc[i] = arc[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    }
+    const total = arc[n - 1];
+    let taperLen = 0;
+    if (opts && opts.taper && total > size * 1.5) {
+      taperLen = U.clamp(total * 0.22, size * 0.8, size * 3.2);
+    }
+    const radii = new Array(n);
+    for (let i = 0; i < n; i++) {
+      let r = Ink.widthAt(pts[i].p, size, pressureAmount) / 2;
+      if (taperLen) {
+        const a = Math.min(1, arc[i] / taperLen);
+        const b = Math.min(1, (total - arc[i]) / taperLen);
+        const f = Math.min(a * (2 - a), 1 - Math.pow(1 - b, 3));
+        r *= 0.12 + 0.88 * f;
+      }
+      radii[i] = Math.max(r, 0.15);
+    }
     const left = [], right = [];
     let prevA = null;
     for (let i = 0; i < n; i++) {
@@ -82,12 +103,12 @@
         if (prevA == null) { dx = 1; dy = 0; } else { dx = Math.cos(prevA); dy = Math.sin(prevA); }
       } else { dx /= len; dy /= len; }
       prevA = Math.atan2(dy, dx);
-      const r = Ink.widthAt(pts[i].p, size, pressureAmount) / 2;
+      const r = radii[i];
       left.push({ x: pts[i].x - dy * r, y: pts[i].y + dx * r });
       right.push({ x: pts[i].x + dy * r, y: pts[i].y - dx * r });
     }
-    const startR = Ink.widthAt(pts[0].p, size, pressureAmount) / 2;
-    const endR = Ink.widthAt(pts[n - 1].p, size, pressureAmount) / 2;
+    const startR = radii[0];
+    const endR = radii[n - 1];
     path.moveTo(left[0].x, left[0].y);
     for (let i = 1; i < n; i++) {
       const mx = (left[i - 1].x + left[i].x) / 2, my = (left[i - 1].y + left[i].y) / 2;

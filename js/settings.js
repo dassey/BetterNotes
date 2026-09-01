@@ -21,6 +21,14 @@
       desc: 'How strongly pressure changes the line width.'
     },
     {
+      key: 'input.simPressure', label: 'Simulated pressure', type: 'toggle', def: true,
+      desc: 'No Pencil? Vary ink width with drawing speed instead, so finger and mouse strokes still look inked.'
+    },
+    {
+      key: 'input.taper', label: 'Taper stroke ends', type: 'toggle', def: true,
+      desc: 'Ink thins out at the start and end of each stroke, like a real pen lift.'
+    },
+    {
       key: 'input.smoothing', label: 'Ink smoothing', type: 'range', min: 0, max: 1, step: 0.05, def: 0.5,
       desc: 'Steadies shaky lines as you write. Higher = smoother, slightly lazier ink.'
     },
@@ -37,8 +45,8 @@
       desc: 'How long to hold still before a shape snaps.'
     },
     {
-      key: 'input.twoFingerUndo', label: 'Two-finger tap to undo', type: 'toggle', def: true,
-      desc: 'Quick two-finger tap on the page undoes the last action.'
+      key: 'input.twoFingerUndo', label: 'Tap gestures', type: 'toggle', def: true,
+      desc: 'Quick two-finger tap undoes, three-finger tap redoes.'
     },
 
     { section: 'Ink defaults' },
@@ -48,6 +56,11 @@
     { key: 'ink.highSize', label: 'Highlighter size', type: 'range', min: 6, max: 40, step: 1, def: 16 },
     { key: 'ink.highOpacity', label: 'Highlighter opacity', type: 'range', min: 0.15, max: 0.6, step: 0.05, def: 0.35 },
     { key: 'ink.eraserSize', label: 'Eraser size', type: 'range', min: 6, max: 60, step: 1, def: 22 },
+    {
+      key: 'ink.eraserMode', label: 'Eraser mode', type: 'select', def: 'precise',
+      options: [['precise', 'Precise (erase parts)'], ['stroke', 'Whole stroke']],
+      desc: 'Precise erases only the ink under the eraser, splitting strokes where it passes through.'
+    },
 
     { section: 'Handwriting' },
     {

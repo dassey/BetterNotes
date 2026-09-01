@@ -67,7 +67,6 @@
     const out = [pts[0]];
     let carry = 0;
     for (let i = 1; i < pts.length; i++) {
-      let a = out[out.length - 1].x === undefined ? pts[i - 1] : pts[i - 1];
       let prev = pts[i - 1], cur = pts[i];
       let segLen = U.dist(prev.x, prev.y, cur.x, cur.y);
       let d = carry;

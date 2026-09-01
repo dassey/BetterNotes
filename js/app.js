@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.1.0';
+  BN.VERSION = '0.2.0';
 
   let toastTimer = null;
 
@@ -72,7 +72,7 @@
     note.items.push(
       mk(48, 'Welcome to BetterNotes ✍️', 30, '#4f7cff'),
       mk(112, 'Everything stays on this device — no accounts, nothing uploaded, works offline.', 18),
-      mk(176, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink, then move, resize, recolor or Tidy it\n• Add text boxes (write into them with the Pencil — Scribble types it for you)\n• Insert photos and move them around\n• Pinch to zoom, two-finger tap to undo', 17),
+      mk(176, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink, then move, resize, recolor or Tidy it\n• Add text boxes (write into them with the Pencil — Scribble types it for you)\n• Insert photos and move them around\n• Precise eraser splits strokes — or switch it to whole-stroke\n• Pinch to zoom · two-finger tap undo · three-finger tap redo', 17),
       mk(430, 'Open ⚙ Settings to tune everything: palm rejection, pressure, smoothing, paper, themes and backups.', 17),
       mk(500, 'Tip: tap the active pen tool again to pick colors and sizes.', 17, '#4f7cff')
     );
