@@ -172,7 +172,7 @@
 
   // Returns replacement centerline points (constant pressure) or null.
   Ink.detectShape = function (ptsIn) {
-    if (ptsIn.length < 8) return null;
+    if (ptsIn.length < 3) return null;
     const pts = U.resample(ptsIn, Math.max(2, U.pathLength(ptsIn) / 96));
     if (pts.length < 6) return null;
     const len = U.pathLength(pts);
@@ -185,7 +185,7 @@
       // Straight line? max deviation from the chord.
       let maxD = 0;
       for (const p of pts) maxD = Math.max(maxD, U.pointSegDist(p.x, p.y, first.x, first.y, last.x, last.y));
-      if (maxD < Math.max(5, len * 0.045)) {
+      if (maxD < Math.max(6, len * 0.05)) {
         return snapLine(first, last);
       }
       return null;
@@ -208,14 +208,14 @@
     const simplified = U.rdp(pts, Math.max(6, len * 0.035));
     const corners = dedupeClosePoints(simplified, Math.max(10, len * 0.05));
 
-    if (ellipseErr < 0.16 && corners.length > 5) return snapEllipse(cx, cy, rx, ry);
+    if (ellipseErr < 0.18 && corners.length > 5) return snapEllipse(cx, cy, rx, ry);
     if (corners.length === 4 || corners.length === 5) {
       const quad = corners.slice(0, 4);
       if (isRectangular(quad)) return snapRect(bb);
       return snapPolygon(quad);
     }
     if (corners.length === 3) return snapPolygon(corners.slice(0, 3));
-    if (ellipseErr < 0.22) return snapEllipse(cx, cy, rx, ry);
+    if (ellipseErr < 0.24) return snapEllipse(cx, cy, rx, ry);
     return null;
   };
 
@@ -233,7 +233,7 @@
       const a = quad[i], b = quad[(i + 1) % 4], c = quad[(i + 2) % 4];
       const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
       const dot = (v1x * v2x + v1y * v2y) / ((Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y)) || 1);
-      if (Math.abs(dot) > 0.42) return false; // > ~65° off right angle
+      if (Math.abs(dot) > 0.5) return false; // > 60° off right angle
     }
     return true;
   }
