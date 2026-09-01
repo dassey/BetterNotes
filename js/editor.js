@@ -875,14 +875,17 @@
       points: []
     };
     if (isHigh) item.opacity = S.get('ink.highOpacity');
-    const smoother = Ink.createSmoother(S.get('input.smoothing'));
+    const sm = S.get('input.smoothing');
+    const ropePx = Math.max(0, sm - 0.35) * 15; // dead-zone radius in screen px, ~10px at max
+    const smoother = Ink.createSmoother(sm, ropePx / renderer.t.s);
     const realP = e.pointerType === 'pen' && e.pressure > 0;
     const first = smoother.push({ x: w.x, y: w.y, p: realP ? e.pressure : 0.62 });
     item.points.push(first);
     action = {
       kind: 'draw', item, smoother, pid: e.pointerId, byTouch: e.pointerType === 'touch',
-      t0: performance.now(), lastMoveT: performance.now(), lastPt: first,
+      t0: performance.now(), lastMoveT: performance.now(), lastPt: first, lastRaw: null,
       sim: S.get('input.simPressure') !== false, simP: 0.62,
+      pred: S.get('input.prediction') && ropePx <= 4, // predicted tail fights a strong stabilizer
       predicted: [], snapped: null, snapCheckAt: 0
     };
     startLiveLoop();
@@ -997,6 +1000,7 @@
             p = 0.5;
           }
           const pt = action.smoother.push({ x: w.x, y: w.y, p });
+          action.lastRaw = w;
           const lp = action.lastPt;
           if (U.dist(pt.x, pt.y, lp.x, lp.y) * t.s >= 1.1) {
             action.item.points.push(pt);
@@ -1008,7 +1012,7 @@
           }
         }
         action.predicted = [];
-        if (S.get('input.prediction') && e.getPredictedEvents) {
+        if (action.pred && e.getPredictedEvents) {
           for (const ev of e.getPredictedEvents().slice(0, 4)) {
             const l = localXY(ev);
             action.predicted.push(renderer.worldFromScreen(l.x, l.y));
@@ -1420,6 +1424,13 @@
       item.points = a.snapped;
       item.snap = true;
     } else {
+      // Catch the stabilizer's trailing tip halfway up to where the pen lifted.
+      if (a.lastRaw && item.points.length > 1) {
+        const lp = item.points[item.points.length - 1];
+        if (U.dist(lp.x, lp.y, a.lastRaw.x, a.lastRaw.y) > 0.5) {
+          item.points.push({ x: (lp.x + a.lastRaw.x) / 2, y: (lp.y + a.lastRaw.y) / 2, p: lp.p });
+        }
+      }
       item.points = Ink.finalizePoints(item.points, S.get('input.smoothing'));
     }
     delete item._bb;
@@ -1757,6 +1768,7 @@
       if (tool === 'pen') {
         pop.appendChild(swatchRow(PRESETS, S.get('ink.penColor'), (c) => { S.set('ink.penColor', c); }));
         pop.appendChild(sliderRow('Size', 1, 14, 0.5, S.get('ink.penSize'), (v) => S.set('ink.penSize', v)));
+        pop.appendChild(sliderRow('Steady', 0, 1, 0.05, S.get('input.smoothing'), (v) => S.set('input.smoothing', v)));
       } else if (tool === 'high') {
         pop.appendChild(swatchRow(HIGH_PRESETS, S.get('ink.highColor'), (c) => S.set('ink.highColor', c)));
         pop.appendChild(sliderRow('Size', 6, 40, 1, S.get('ink.highSize'), (v) => S.set('ink.highSize', v)));

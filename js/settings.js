@@ -29,8 +29,8 @@
       desc: 'Ink thins out at the start and end of each stroke, like a real pen lift.'
     },
     {
-      key: 'input.smoothing', label: 'Ink smoothing', type: 'range', min: 0, max: 1, step: 0.05, def: 0.5,
-      desc: 'Steadies shaky lines as you write. Higher = smoother, slightly lazier ink.'
+      key: 'input.smoothing', label: 'Stabilize strokes', type: 'range', min: 0, max: 1, step: 0.05, def: 0.55,
+      desc: 'Steadies shaky handwriting as you write: small hand tremors are absorbed before they reach the page. Higher = calmer ink that trails the pen a little. Also in the pen tool’s popover.'
     },
     {
       key: 'input.prediction', label: 'Stroke prediction', type: 'toggle', def: true,

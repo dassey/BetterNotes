@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.4.1';
+  BN.VERSION = '0.5.0';
 
   let toastTimer = null;
 
