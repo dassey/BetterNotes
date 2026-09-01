@@ -106,6 +106,7 @@
     const style = note.paper.style || 'blank';
     if (style === 'blank') return;
     const spacing = note.paper.spacing || 32;
+    if (spacing * this.t.s < 3) return; // rules would be sub-pixel mush when zoomed far out
     // Rule color adapts to paper lightness.
     const c = note.paper.color || '#ffffff';
     const rgb = [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
@@ -166,7 +167,16 @@
     } else if (item.type === 'image') {
       const entry = this.ensureImage(item);
       if (entry && entry.ready) {
-        ctx.drawImage(entry.bmp, item.x, item.y, item.w, item.h);
+        if (item.crop) {
+          const b = entry.bmp;
+          const cx = U.clamp(item.crop.x, 0, b.width - 1);
+          const cy = U.clamp(item.crop.y, 0, b.height - 1);
+          const cw = U.clamp(item.crop.w, 1, b.width - cx);
+          const ch = U.clamp(item.crop.h, 1, b.height - cy);
+          ctx.drawImage(b, cx, cy, cw, ch, item.x, item.y, item.w, item.h);
+        } else {
+          ctx.drawImage(entry.bmp, item.x, item.y, item.w, item.h);
+        }
       } else {
         ctx.save();
         ctx.fillStyle = 'rgba(128,128,128,0.15)';

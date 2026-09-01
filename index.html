@@ -109,8 +109,11 @@
       <div id="selActions" hidden>
         <button id="sel-tidy">Tidy</button>
         <button id="sel-color">Color</button>
+        <button id="sel-crop" hidden>Crop</button>
         <button id="sel-dup">Copy</button>
         <button id="sel-del" class="danger">Delete</button>
+        <button id="sel-crop-done" class="primary" hidden>Done</button>
+        <button id="sel-crop-cancel" hidden>Cancel</button>
       </div>
     </div>
     <input id="imgInput" type="file" accept="image/*" multiple hidden>
@@ -153,15 +156,16 @@
 
         <h3>Selecting &amp; tidying</h3>
         <ul>
-          <li><strong>Lasso</strong> — circle any ink, text or images, then drag to move them, use the corner handles to resize, or tap <em>Tidy</em> to smooth out messy handwriting.</li>
-          <li><strong>Copy / Delete / Color</strong> — from the bar above the selection.</li>
+          <li><strong>Select</strong> — circle any ink, text or images (or tap the select tool a second time to switch to rectangle drag), then drag to move, use the corner handles to resize, or tap <em>Tidy</em> to smooth out messy handwriting.</li>
+          <li><strong>Copy / Delete / Color</strong> — from the bar above the selection. A single tap picks one item; tap empty space to clear the selection.</li>
+          <li><strong>Hand tool</strong> — pick it when you want nothing armed: every finger or pen touch just pans, nothing draws or selects.</li>
         </ul>
 
         <h3>Text &amp; Scribble</h3>
         <p>With the Text tool, tap anywhere to place a text box. On iPad you can <strong>handwrite straight into a text box with the Pencil</strong> — iPadOS Scribble converts it to typed text on the device. That’s the cleanest “messy handwriting → neat text” path, and it never leaves your iPad.</p>
 
         <h3>Photos</h3>
-        <p>Tap the photo button to insert images; drag to move, corner handles to resize. Images are stored inside the note on your device.</p>
+        <p>Tap the photo button to insert images; drag to move, corner handles to resize. Select a photo and tap <strong>Crop</strong> to trim it — the crop is non-destructive, so cropping again can bring the edges back. Images are stored inside the note on your device.</p>
 
         <h3>Privacy</h3>
         <p class="muted">No accounts. No tracking. No uploads. Notes live in your browser’s on-device storage — use Settings → “Back up all notes” to save them to a file, and “Protect storage” to ask the device to keep them safe. If you ever clear Safari website data, backed-up files are your safety net.</p>

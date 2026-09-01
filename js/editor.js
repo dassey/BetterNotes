@@ -20,9 +20,10 @@
   let lastThumbAt = 0;
   let touchTap = null;          // multi-finger tap candidate (2 = undo, 3 = redo)
   let lastPenAt = 0;            // pen-priority palm rejection window
+  let cropState = null;         // active image-crop session
   let el = {};                  // dom refs
 
-  const MIN_S = 0.15, MAX_S = 6;
+  const MIN_S = 0.02, MAX_S = 40;
   const PRESETS = ['#1d1d2e', '#4f7cff', '#e5484d', '#2f9e44', '#f59f00', '#9c36b5', '#0ca678', '#846358', '#ffffff'];
   const HIGH_PRESETS = ['#ffd60a', '#7ae582', '#6ec3ff', '#ff8fa3', '#d0a5ff', '#ffb347'];
 
@@ -87,6 +88,7 @@
   Editor.close = async function () {
     if (!note) return;
     closePopover();
+    cancelCrop();
     commitFocusedText();
     autosave.cancel();
     await doSave(true);
@@ -139,8 +141,13 @@
   const sharpRender = U.debounce(() => { if (note) renderAll(); }, 150);
 
   function renderAll() {
-    renderer.render(note);
-    renderer.renderLive(drawOverlays);
+    if (cropState) {
+      renderer.render(note, { skip: new Set([cropState.id]) });
+      renderer.renderLive(drawCropOverlay);
+    } else {
+      renderer.render(note);
+      renderer.renderLive(drawOverlays);
+    }
     updateTextLayerTransform();
     positionSelActions();
   }
@@ -171,6 +178,7 @@
   }
 
   function doUndo() {
+    cancelCrop();
     const op = undoStack.pop();
     if (!op) return;
     op.undo();
@@ -178,6 +186,7 @@
     afterHistoryChange();
   }
   function doRedo() {
+    cancelCrop();
     const op = redoStack.pop();
     if (!op) return;
     op.redo();
@@ -287,7 +296,8 @@
   function setSelection(ids) {
     selection = ids && ids.length ? { ids: ids.slice(), bbox: null } : null;
     updateSelectionBBox();
-    renderer.renderLive(drawOverlays);
+    updateSelActionsButtons();
+    renderer.renderLive(cropState ? drawCropOverlay : drawOverlays);
     positionSelActions();
   }
 
@@ -338,12 +348,18 @@
   }
 
   function positionSelActions() {
-    if (!selection || !selection.bbox || (action && action.kind !== 'moveSel')) {
+    let bb = null;
+    let off = { x: 0, y: 0 };
+    if (cropState) {
+      bb = cropState.world;
+    } else if (selection && selection.bbox && (!action || action.kind === 'moveSel')) {
+      bb = selection.bbox;
+      if (action && action.kind === 'moveSel') off = { x: action.dx, y: action.dy };
+    }
+    if (!bb) {
       el.selActions.hidden = true;
       return;
     }
-    const bb = selection.bbox;
-    const off = action && action.kind === 'moveSel' ? { x: action.dx, y: action.dy } : { x: 0, y: 0 };
     const p = renderer.screenFromWorld(bb.x + bb.w / 2 + off.x, bb.y + off.y);
     el.selActions.hidden = false;
     const bw = el.selActions.offsetWidth || 200;
@@ -541,6 +557,129 @@
     }
   }
 
+  /* =================== image crop =================== */
+
+  function startCrop() {
+    const items = selectedItems();
+    const it = items.length === 1 && items[0].type === 'image' ? items[0] : null;
+    if (!it) return;
+    const entry = renderer.ensureImage(it);
+    if (!entry || !entry.ready) { app.toast('Photo is still loading — try again'); return; }
+    const srcW = entry.bmp.width, srcH = entry.bmp.height;
+    const crop = it.crop || { x: 0, y: 0, w: srcW, h: srcH };
+    const kx = it.w / crop.w, ky = it.h / crop.h;
+    cropState = {
+      id: it.id, srcW, srcH,
+      world: { x: it.x, y: it.y, w: it.w, h: it.h },
+      full: { x: it.x - crop.x * kx, y: it.y - crop.y * ky, w: srcW * kx, h: srcH * ky },
+      before: { x: it.x, y: it.y, w: it.w, h: it.h, crop: it.crop ? { ...it.crop } : null }
+    };
+    updateSelActionsButtons();
+    renderAll();
+  }
+
+  function commitCrop() {
+    const cs = cropState;
+    if (!cs) return;
+    cropState = null;
+    const it = byId(cs.id);
+    if (it) {
+      const kx = cs.srcW / cs.full.w, ky = cs.srcH / cs.full.h;
+      const c = {
+        x: U.clamp(Math.round((cs.world.x - cs.full.x) * kx), 0, cs.srcW - 1),
+        y: U.clamp(Math.round((cs.world.y - cs.full.y) * ky), 0, cs.srcH - 1)
+      };
+      c.w = U.clamp(Math.round(cs.world.w * kx), 1, cs.srcW - c.x);
+      c.h = U.clamp(Math.round(cs.world.h * ky), 1, cs.srcH - c.y);
+      const isFull = c.x === 0 && c.y === 0 && c.w === cs.srcW && c.h === cs.srcH;
+      const after = { x: cs.world.x, y: cs.world.y, w: cs.world.w, h: cs.world.h, crop: isFull ? null : c };
+      Object.assign(it, U.deepClone(after));
+      pushOp(opFields(it.id, cs.before, after));
+    }
+    updateSelActionsButtons();
+    updateSelectionBBox();
+    renderAll();
+  }
+
+  function cancelCrop() {
+    if (!cropState) return;
+    cropState = null;
+    updateSelActionsButtons();
+    renderAll();
+  }
+
+  function cropHandles() {
+    const r = cropState.world;
+    return [
+      { x: r.x, y: r.y, dx: -1, dy: -1 }, { x: r.x + r.w / 2, y: r.y, dx: 0, dy: -1 }, { x: r.x + r.w, y: r.y, dx: 1, dy: -1 },
+      { x: r.x + r.w, y: r.y + r.h / 2, dx: 1, dy: 0 }, { x: r.x + r.w, y: r.y + r.h, dx: 1, dy: 1 },
+      { x: r.x + r.w / 2, y: r.y + r.h, dx: 0, dy: 1 }, { x: r.x, y: r.y + r.h, dx: -1, dy: 1 }, { x: r.x, y: r.y + r.h / 2, dx: -1, dy: 0 }
+    ];
+  }
+
+  function drawCropOverlay(ctx) {
+    const cs = cropState;
+    if (!cs) return;
+    const t = renderer.t;
+    const entry = renderer.images.get(cs.id);
+    if (entry && entry.ready) {
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(entry.bmp, cs.full.x, cs.full.y, cs.full.w, cs.full.h);
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(cs.world.x, cs.world.y, cs.world.w, cs.world.h);
+      ctx.clip();
+      ctx.drawImage(entry.bmp, cs.full.x, cs.full.y, cs.full.w, cs.full.h);
+      ctx.restore();
+    }
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4f7cff';
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2 / t.s;
+    ctx.strokeRect(cs.world.x, cs.world.y, cs.world.w, cs.world.h);
+    ctx.fillStyle = '#ffffff';
+    ctx.lineWidth = 1.5 / t.s;
+    for (const h of cropHandles()) {
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 9 / t.s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
+  const cropRedraw = U.rafThrottle(() => {
+    if (!cropState) return;
+    renderer.renderLive(drawCropOverlay);
+    positionSelActions();
+  });
+
+  function startCropDrag(e, s) {
+    const w = renderer.worldFromScreen(s.x, s.y);
+    for (const h of cropHandles()) {
+      const p = renderer.screenFromWorld(h.x, h.y);
+      if (U.dist(p.x, p.y, s.x, s.y) < 18) {
+        action = { kind: 'cropDrag', pid: e.pointerId, mode: 'resize', hx: h.dx, hy: h.dy, start: w, orig: { ...cropState.world } };
+        return;
+      }
+    }
+    if (U.bboxContains(cropState.world, w.x, w.y)) {
+      action = { kind: 'cropDrag', pid: e.pointerId, mode: 'move', start: w, orig: { ...cropState.world } };
+    }
+  }
+
+  function updateSelActionsButtons() {
+    const cropping = !!cropState;
+    const items = selection ? selectedItems() : [];
+    const singleImage = !cropping && items.length === 1 && items[0].type === 'image';
+    for (const id of ['sel-tidy', 'sel-color', 'sel-dup', 'sel-del']) {
+      document.getElementById(id).hidden = cropping;
+    }
+    document.getElementById('sel-crop').hidden = cropping || !singleImage;
+    document.getElementById('sel-crop-done').hidden = !cropping;
+    document.getElementById('sel-crop-cancel').hidden = !cropping;
+  }
+
   /* =================== pointer input =================== */
 
   function bindPointerEvents() {
@@ -605,6 +744,7 @@
       action = null; // pen wins over a stray palm gesture
     }
     if (action) return;
+    if (cropState) { startCropDrag(e, s); return; }
     startToolAction(e, s);
   }
 
@@ -704,9 +844,9 @@
         return;
       }
     }
-    // Anywhere else: drag = lasso; tap (resolved on pointerup) = pick the item under it.
+    // Anywhere else: drag = lasso/rect; tap (resolved on pointerup) = pick the item under it.
     setSelection(null);
-    action = { kind: 'lasso', poly: [w], pid: e.pointerId };
+    action = { kind: 'lasso', poly: [w], pid: e.pointerId, start: w, rectMode: S.get('sel.mode') === 'rect' };
     startLiveLoop();
   }
 
@@ -812,8 +952,13 @@
       case 'lasso': {
         if (e.pointerId !== action.pid) return;
         const w = renderer.worldFromScreen(s.x, s.y);
-        const last = action.poly[action.poly.length - 1];
-        if (U.dist(w.x, w.y, last.x, last.y) * renderer.t.s > 3) action.poly.push(w);
+        if (action.rectMode) {
+          const a = action.start;
+          action.poly = [a, { x: w.x, y: a.y }, w, { x: a.x, y: w.y }];
+        } else {
+          const last = action.poly[action.poly.length - 1];
+          if (U.dist(w.x, w.y, last.x, last.y) * renderer.t.s > 3) action.poly.push(w);
+        }
         break;
       }
       case 'moveSel': {
@@ -835,6 +980,26 @@
         const w = renderer.worldFromScreen(s.x, s.y);
         action.f = U.clamp(U.dist(w.x, w.y, action.anchor.x, action.anchor.y) / action.startDist, 0.05, 20);
         setTextScale(action.anchor, action.f);
+        break;
+      }
+      case 'cropDrag': {
+        if (e.pointerId !== action.pid || !cropState) return;
+        const w = renderer.worldFromScreen(s.x, s.y);
+        const o = action.orig, f = cropState.full;
+        const minW = Math.max(8, f.w * 0.04), minH = Math.max(8, f.h * 0.04);
+        const r = { ...o };
+        if (action.mode === 'move') {
+          r.x = U.clamp(o.x + (w.x - action.start.x), f.x, f.x + f.w - o.w);
+          r.y = U.clamp(o.y + (w.y - action.start.y), f.y, f.y + f.h - o.h);
+        } else {
+          const dx = w.x - action.start.x, dy = w.y - action.start.y;
+          if (action.hx < 0) { const nx = U.clamp(o.x + dx, f.x, o.x + o.w - minW); r.w = o.x + o.w - nx; r.x = nx; }
+          if (action.hx > 0) r.w = U.clamp(o.w + dx, minW, f.x + f.w - o.x);
+          if (action.hy < 0) { const ny = U.clamp(o.y + dy, f.y, o.y + o.h - minH); r.h = o.y + o.h - ny; r.y = ny; }
+          if (action.hy > 0) r.h = U.clamp(o.h + dy, minH, f.y + f.h - o.y);
+        }
+        cropState.world = r;
+        cropRedraw();
         break;
       }
       case 'textTap': {
@@ -871,7 +1036,7 @@
   const gestureFrame = U.rafThrottle(() => {
     if (!note) return;
     renderer.blit();
-    renderer.renderLive(drawOverlays);
+    renderer.renderLive(cropState ? drawCropOverlay : drawOverlays);
     updateTextLayerTransform();
     positionSelActions();
     sharpRender();
@@ -1063,6 +1228,10 @@
         renderAll();
         break;
       }
+      case 'cropDrag':
+        if (e.pointerId !== action.pid) return;
+        action = null;
+        break;
       case 'textTap': {
         const a = action; action = null;
         const hitText = hitTestItem(a.start);
@@ -1159,7 +1328,7 @@
   function liveFrame() {
     if (!note || !action || !['draw', 'erase', 'lasso', 'moveSel', 'scaleSel'].includes(action.kind)) {
       liveRunning = false;
-      if (note) { renderer.renderLive(drawOverlays); positionSelActions(); }
+      if (note) { renderer.renderLive(cropState ? drawCropOverlay : drawOverlays); positionSelActions(); }
       return;
     }
     checkShapeSnap();
@@ -1289,7 +1458,7 @@
         if (e.key === 'Escape') document.activeElement.blur();
         return;
       }
-      if (e.key === 'Escape') { setSelection(null); closePopover(); return; }
+      if (e.key === 'Escape') { cancelCrop(); setSelection(null); closePopover(); return; }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selection) { e.preventDefault(); deleteSelection(); return; }
       const map = { p: 'pen', h: 'high', e: 'eraser', s: 'select', t: 'text', g: 'hand' };
       if (map[e.key.toLowerCase()] && !e.metaKey && !e.ctrlKey) setTool(map[e.key.toLowerCase()]);
@@ -1300,6 +1469,7 @@
   /* =================== toolbar & popovers =================== */
 
   function setTool(name) {
+    cancelCrop();
     tool = name;
     el.wrap.dataset.tool = name;
     for (const b of el.tools.querySelectorAll('[data-tool]')) {
@@ -1321,7 +1491,7 @@
 
     for (const b of el.tools.querySelectorAll('[data-tool]')) {
       b.addEventListener('click', () => {
-        if (tool === b.dataset.tool && ['pen', 'high', 'eraser'].includes(tool)) {
+        if (tool === b.dataset.tool && ['pen', 'high', 'eraser', 'select'].includes(tool)) {
           openToolOptions(b);
         } else {
           setTool(b.dataset.tool);
@@ -1340,6 +1510,9 @@
     // selection actions
     document.getElementById('sel-tidy').addEventListener('click', tidySelection);
     document.getElementById('sel-color').addEventListener('click', (e) => openSelectionColor(e.currentTarget));
+    document.getElementById('sel-crop').addEventListener('click', startCrop);
+    document.getElementById('sel-crop-done').addEventListener('click', commitCrop);
+    document.getElementById('sel-crop-cancel').addEventListener('click', cancelCrop);
     document.getElementById('sel-dup').addEventListener('click', duplicateSelection);
     document.getElementById('sel-del').addEventListener('click', deleteSelection);
     updateToolIndicators();
@@ -1402,6 +1575,22 @@
     return row;
   }
 
+  function segmentedRow(options, current, onPick) {
+    const seg = document.createElement('div');
+    seg.className = 'segmented';
+    for (const [v, label] of options) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.classList.toggle('active', current === v);
+      b.addEventListener('click', () => {
+        onPick(v);
+        for (const sb of seg.children) sb.classList.toggle('active', sb === b);
+      });
+      seg.appendChild(b);
+    }
+    return seg;
+  }
+
   function sliderRow(label, min, max, step, val, onInput) {
     const row = document.createElement('div');
     row.className = 'pop-slider';
@@ -1423,20 +1612,10 @@
         pop.appendChild(sliderRow('Size', 6, 40, 1, S.get('ink.highSize'), (v) => S.set('ink.highSize', v)));
         pop.appendChild(sliderRow('Opacity', 0.15, 0.6, 0.05, S.get('ink.highOpacity'), (v) => S.set('ink.highOpacity', v)));
       } else if (tool === 'eraser') {
-        const seg = document.createElement('div');
-        seg.className = 'segmented';
-        for (const [v, label] of [['precise', 'Precise'], ['stroke', 'Whole stroke']]) {
-          const b = document.createElement('button');
-          b.textContent = label;
-          b.classList.toggle('active', (S.get('ink.eraserMode') || 'precise') === v);
-          b.addEventListener('click', () => {
-            S.set('ink.eraserMode', v);
-            for (const sb of seg.children) sb.classList.toggle('active', sb === b);
-          });
-          seg.appendChild(b);
-        }
-        pop.appendChild(seg);
+        pop.appendChild(segmentedRow([['precise', 'Precise'], ['stroke', 'Whole stroke']], S.get('ink.eraserMode') || 'precise', (v) => S.set('ink.eraserMode', v)));
         pop.appendChild(sliderRow('Size', 6, 60, 1, S.get('ink.eraserSize'), (v) => S.set('ink.eraserSize', v)));
+      } else if (tool === 'select') {
+        pop.appendChild(segmentedRow([['lasso', 'Freehand lasso'], ['rect', 'Rectangle']], S.get('sel.mode') || 'lasso', (v) => S.set('sel.mode', v)));
       }
     });
   }
