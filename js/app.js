@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.3.0';
+  BN.VERSION = '0.4.0';
 
   let toastTimer = null;
 
@@ -51,7 +51,8 @@
       width: parseInt(BN.Settings.get('paper.width'), 10) || 800,
       style: BN.Settings.get('paper.style'),
       spacing: BN.Settings.get('paper.spacing'),
-      color: BN.Settings.get('paper.color')
+      color: BN.Settings.get('paper.color'),
+      layout: BN.Settings.get('paper.layout')
     });
     await BN.Store.saveNote(note, null);
     App.openNote(note.id);
@@ -64,7 +65,7 @@
     try { localStorage.setItem('bn.welcomed', '1'); } catch (e) { }
     const metas = await BN.Store.listMeta();
     if (metas.length) return;
-    const note = BN.Store.newNote({ width: 800, style: 'lines', spacing: 32, color: '#ffffff' });
+    const note = BN.Store.newNote({ width: 800, style: 'lines', spacing: 32, color: '#ffffff', layout: 'page' });
     note.title = 'Welcome to BetterNotes';
     const mk = (y, text, size, color) => ({
       id: U.uid(), type: 'text', x: 56, y, w: 690, h: size * 1.5, size, color: color || '#1d1d2e', text
