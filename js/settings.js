@@ -55,6 +55,14 @@
     },
 
     { section: 'Ink defaults' },
+    {
+      key: 'pens.showBar', label: 'Saved pens bar', type: 'toggle', def: true,
+      desc: 'Floating row of saved pens under the toolbar. Tap + there to save the current pen; tap the active pen chip again to update or remove it.'
+    },
+    {
+      key: 'pens.saved', type: 'internal',
+      def: [{ color: '#1d1d2e', size: 3 }, { color: '#4f7cff', size: 3 }, { color: '#e5484d', size: 3 }]
+    },
     { key: 'ink.penColor', label: 'Pen color', type: 'color', def: '#1d1d2e' },
     { key: 'ink.penSize', label: 'Pen size', type: 'range', min: 1, max: 14, step: 0.5, def: 3 },
     { key: 'ink.highColor', label: 'Highlighter color', type: 'color', def: '#ffd60a' },
@@ -165,6 +173,7 @@
   Settings.render = function (container, version) {
     container.innerHTML = '';
     for (const item of SCHEMA) {
+      if (item.type === 'internal') continue;
       if (item.section) {
         const h = document.createElement('h3');
         h.className = 'set-section';

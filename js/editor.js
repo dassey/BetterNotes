@@ -45,7 +45,8 @@
       redo: document.getElementById('ed-redo'),
       selActions: document.getElementById('selActions'),
       tools: document.getElementById('ed-tools'),
-      imgInput: document.getElementById('imgInput')
+      imgInput: document.getElementById('imgInput'),
+      penBar: document.getElementById('penBar')
     };
     renderer = new BN.Renderer(el.wrap, el.inkC, el.liveC);
     bindToolbar();
@@ -55,6 +56,7 @@
     document.addEventListener('bn:settings-changed', (e) => {
       if (e.detail.key === 'storage.autosaveMs') makeAutosave();
       if ((e.detail.key.startsWith('appearance.') || e.detail.key === 'input.taper') && note) renderAll();
+      if (['ink.penColor', 'ink.penSize', 'pens.saved', 'pens.showBar'].includes(e.detail.key)) renderPenBar();
       updateToolIndicators();
     });
     document.addEventListener('bn:image-ready', () => { if (note) renderAll(); });
@@ -86,6 +88,7 @@
     rebuildTextLayer();
     renderAll();
     setTool(tool || 'pen');
+    renderPenBar();
     updateUndoButtons();
   };
 
@@ -782,7 +785,7 @@
     closePopover();
     // Let the browser handle taps into text boxes (focus/caret/Scribble).
     if (tool === 'text' && e.target.closest && e.target.closest('.bn-text')) return;
-    if (e.target.closest && e.target.closest('#selActions')) return;
+    if (e.target.closest && (e.target.closest('#selActions') || e.target.closest('#penBar'))) return;
     commitFocusedText();
     e.preventDefault();
     try { el.wrap.setPointerCapture(e.pointerId); } catch (err) { }
@@ -884,6 +887,7 @@
     action = {
       kind: 'draw', item, smoother, pid: e.pointerId, byTouch: e.pointerType === 'touch',
       t0: performance.now(), lastMoveT: performance.now(), lastPt: first, lastRaw: null,
+      raw: [{ x: w.x, y: w.y }], // unstabilized input, for shape detection
       sim: S.get('input.simPressure') !== false, simP: 0.62,
       pred: S.get('input.prediction') && ropePx <= 4, // predicted tail fights a strong stabilizer
       predicted: [], snapped: null, snapCheckAt: 0
@@ -1001,6 +1005,8 @@
           }
           const pt = action.smoother.push({ x: w.x, y: w.y, p });
           action.lastRaw = w;
+          const rl = action.raw[action.raw.length - 1];
+          if (U.dist(w.x, w.y, rl.x, rl.y) * t.s >= 1.5) action.raw.push({ x: w.x, y: w.y });
           const lp = action.lastPt;
           if (U.dist(pt.x, pt.y, lp.x, lp.y) * t.s >= 1.1) {
             action.item.points.push(pt);
@@ -1486,6 +1492,17 @@
       if (action.kind === 'draw') {
         const item = action.item;
         const pts = action.snapped || item.points;
+        if (action.snapped) {
+          const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#4f7cff';
+          ctx.save();
+          ctx.strokeStyle = accent;
+          ctx.globalAlpha = 0.35;
+          ctx.lineWidth = item.size + 8 / t.s;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke(Ink.centerlinePath(pts));
+          ctx.restore();
+        }
         if (item.tool === 'high') {
           ctx.globalAlpha = item.opacity ?? 0.35;
           ctx.strokeStyle = item.color;
@@ -1578,8 +1595,11 @@
     if (now - action.lastMoveT < S.get('input.shapeSnapDelay')) return;
     if (now - action.snapCheckAt < 180) return;
     action.snapCheckAt = now;
-    if (U.pathLength(action.item.points) < 30) return;
-    const snapped = Ink.detectShape(action.item.points);
+    // Detect on the raw (unstabilized) input — the stabilizer rounds off the
+    // corners the detector needs.
+    const src = action.raw.length >= 4 ? action.raw : action.item.points;
+    if (U.pathLength(src) < 24) return;
+    const snapped = Ink.detectShape(src);
     if (snapped) action.snapped = snapped;
   }
 
@@ -1637,6 +1657,7 @@
       b.classList.toggle('active', b.dataset.tool === name);
     }
     if (name !== 'select') setSelection(null);
+    renderPenBar();
   }
   Editor.setTool = setTool;
 
@@ -1684,6 +1705,83 @@
     const highDot = document.querySelector('[data-tool=high] .dot');
     if (penDot) penDot.style.background = S.get('ink.penColor');
     if (highDot) highDot.style.background = S.get('ink.highColor');
+  }
+
+  /* ---- saved pens bar ---- */
+
+  function savedPens() {
+    const pens = S.get('pens.saved');
+    return Array.isArray(pens) ? pens : [];
+  }
+
+  function renderPenBar() {
+    if (!el.penBar) return;
+    const show = !!note && S.get('pens.showBar') !== false;
+    el.penBar.hidden = !show;
+    if (!show) return;
+    el.penBar.innerHTML = '';
+    const pens = savedPens();
+    pens.forEach((p, idx) => {
+      const b = document.createElement('button');
+      b.className = 'pen-chip';
+      b.setAttribute('aria-label', 'Saved pen');
+      const active = tool === 'pen' && S.get('ink.penColor') === p.color && Math.abs(S.get('ink.penSize') - p.size) < 0.01;
+      b.classList.toggle('active', active);
+      const ink = document.createElement('span');
+      ink.className = 'ink';
+      const d = U.clamp(7 + p.size * 1.4, 8, 24);
+      ink.style.width = ink.style.height = d + 'px';
+      ink.style.background = p.color;
+      b.appendChild(ink);
+      b.addEventListener('click', () => {
+        if (b.classList.contains('active')) { openPenChipMenu(b, idx); return; }
+        S.set('ink.penColor', p.color);
+        S.set('ink.penSize', p.size);
+        setTool('pen');
+      });
+      el.penBar.appendChild(b);
+    });
+    if (pens.length < 8) {
+      const add = document.createElement('button');
+      add.className = 'pen-chip add';
+      add.textContent = '+';
+      add.setAttribute('aria-label', 'Save current pen');
+      add.addEventListener('click', () => {
+        const p = { color: S.get('ink.penColor'), size: S.get('ink.penSize') };
+        if (savedPens().some((q) => q.color === p.color && Math.abs(q.size - p.size) < 0.01)) {
+          app.toast('That pen is already saved');
+          return;
+        }
+        S.set('pens.saved', [...savedPens(), p]);
+        app.toast('Pen saved');
+      });
+      el.penBar.appendChild(add);
+    }
+  }
+
+  function openPenChipMenu(anchor, idx) {
+    openPopover(anchor, (pop) => {
+      const menu = document.createElement('div');
+      menu.className = 'menu';
+      const add = (label, danger, fn) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        if (danger) b.classList.add('danger');
+        b.addEventListener('click', () => { closePopover(); fn(); });
+        menu.appendChild(b);
+      };
+      add('Update to current pen', false, () => {
+        const pens = savedPens().slice();
+        pens[idx] = { color: S.get('ink.penColor'), size: S.get('ink.penSize') };
+        S.set('pens.saved', pens);
+      });
+      add('Remove', true, () => {
+        const pens = savedPens().slice();
+        pens.splice(idx, 1);
+        S.set('pens.saved', pens);
+      });
+      pop.appendChild(menu);
+    });
   }
 
   /* ---- generic popover ---- */

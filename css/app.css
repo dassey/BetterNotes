@@ -305,6 +305,41 @@ input, select { font: inherit; color: inherit; }
 }
 
 #selActions[hidden] { display: none; }
+
+#penBar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  translate: -50% 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 7px;
+  box-shadow: var(--shadow);
+  z-index: 5;
+  max-width: calc(100% - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#penBar[hidden] { display: none; }
+.pen-chip {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 2px solid transparent;
+  background: var(--bg-inset);
+  padding: 0;
+}
+.pen-chip.active { border-color: var(--accent); }
+.pen-chip .ink { border-radius: 50%; display: block; }
+.pen-chip.add { color: var(--text-dim); font-size: 20px; font-weight: 600; }
 #selActions {
   position: absolute;
   display: flex;
