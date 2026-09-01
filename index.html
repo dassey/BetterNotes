@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>BetterNotes</title>
+  <meta name="description" content="Free, private, offline handwriting & notes for iPad and iPhone. Apple Pencil ink, text, images. Everything stays on your device.">
+  <meta name="theme-color" content="#f4f4f7">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="BetterNotes">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+
+  <!-- ============ Home ============ -->
+  <div id="screen-home" class="screen" hidden>
+    <header id="home-header">
+      <h1>Better<span>Notes</span></h1>
+      <button id="home-new" class="icon-btn" aria-label="New note">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button id="home-help" class="icon-btn" aria-label="Help">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.4 2.9c-.8.35-1 .9-1 1.9"/><circle cx="12" cy="17.2" r="0.4" fill="currentColor"/></svg>
+      </button>
+      <button id="home-settings" class="icon-btn" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1"/></svg>
+      </button>
+    </header>
+    <div id="home-searchbar">
+      <input id="home-search" type="search" placeholder="Search notes" autocomplete="off">
+    </div>
+    <div id="home-scroll">
+      <div id="note-grid"></div>
+      <div id="home-empty" hidden>
+        No notes yet.<br>Tap <strong>+</strong> to start writing.
+      </div>
+    </div>
+    <button id="home-fab" aria-label="New note">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </div>
+
+  <!-- ============ Editor ============ -->
+  <div id="screen-editor" class="screen" hidden>
+    <header id="ed-topbar">
+      <button id="ed-back" class="icon-btn" aria-label="Back to notes">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+      </button>
+      <input id="ed-title" type="text" value="Untitled" aria-label="Note title" autocomplete="off">
+      <button id="ed-undo" class="icon-btn" aria-label="Undo" disabled>
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 4.5 4 9l4.5 4.5"/><path d="M4 9h9.5a6 6 0 0 1 6 6v1.5"/></svg>
+      </button>
+      <button id="ed-redo" class="icon-btn" aria-label="Redo" disabled>
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 4.5 20 9l-4.5 4.5"/><path d="M20 9h-9.5a6 6 0 0 0-6 6v1.5"/></svg>
+      </button>
+      <button id="ed-settings" class="icon-btn" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1"/></svg>
+      </button>
+
+      <div class="bar-break"></div>
+
+      <div class="bar-divider" id="ed-d1"></div>
+
+      <div id="ed-tools">
+        <button class="icon-btn" data-tool="pen" aria-label="Pen">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5c.4-2.4.9-3.6 2-4.7L16.8 4.5a2.05 2.05 0 0 1 2.9 2.9L9.4 17.7c-1.1 1.1-2.3 1.6-4.9 1.8z"/></svg>
+          <span class="dot"></span>
+        </button>
+        <button class="icon-btn" data-tool="high" aria-label="Highlighter">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 4.5 20 11l-7.5 7.5H8L6.5 17z"/><path d="M11 7l6 6"/><path d="M4 21h9"/></svg>
+          <span class="dot"></span>
+        </button>
+        <button class="icon-btn" data-tool="eraser" aria-label="Eraser">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 14.5 12.5 7a2 2 0 0 1 2.8 0l2.7 2.7a2 2 0 0 1 0 2.8L12.5 18H9z"/><path d="M6 21h13"/></svg>
+        </button>
+        <button class="icon-btn" data-tool="select" aria-label="Lasso select">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="10" r="6.5" stroke-dasharray="3.4 2.6"/><path d="M12 16.5c-.5 2 .8 3.2 3.2 3.6"/></svg>
+        </button>
+        <button class="icon-btn" data-tool="text" aria-label="Text">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 7V4.5h13V7"/><path d="M12 4.5v15"/><path d="M9 19.5h6"/></svg>
+        </button>
+        <button class="icon-btn" id="ed-image" aria-label="Insert photo">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="8.7" cy="9.7" r="1.5"/><path d="M6 16.5 10.5 12l3.4 3.7 2.3-2.4 2.8 3.2"/></svg>
+        </button>
+        <button class="icon-btn" data-tool="hand" aria-label="Pan">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><path d="m9 5.5 3-3 3 3M9 18.5l3 3 3-3M5.5 9l-3 3 3 3M18.5 9l3 3-3 3"/></svg>
+        </button>
+      </div>
+
+      <div class="bar-divider" id="ed-d2"></div>
+
+      <button id="ed-paper" class="icon-btn" aria-label="Paper style">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4.5"/></svg>
+      </button>
+      <button id="ed-export" class="icon-btn" aria-label="Share / export">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14.5V3.5M8 7l4-3.5L16 7"/><path d="M5.5 11.5v7a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-7"/></svg>
+      </button>
+    </header>
+
+    <div id="canvasWrap" data-tool="pen">
+      <canvas id="inkCanvas"></canvas>
+      <div id="textLayer"></div>
+      <canvas id="liveCanvas"></canvas>
+      <div id="selActions" hidden>
+        <button id="sel-tidy">Tidy</button>
+        <button id="sel-color">Color</button>
+        <button id="sel-dup">Copy</button>
+        <button id="sel-del" class="danger">Delete</button>
+      </div>
+    </div>
+    <input id="imgInput" type="file" accept="image/*" multiple hidden>
+  </div>
+
+  <!-- ============ Settings ============ -->
+  <div id="settings-modal" class="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Settings</h2>
+        <button id="settings-close" class="icon-btn" aria-label="Close settings">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div id="settings-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ============ Help ============ -->
+  <div id="help-modal" class="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Help</h2>
+        <button id="help-close" class="icon-btn" aria-label="Close help">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body help-content">
+        <h3>Install on iPad / iPhone</h3>
+        <p>Open this page in Safari → tap the <strong>Share</strong> button → <strong>Add to Home Screen</strong>. BetterNotes then runs full-screen and fully offline, like a native app.</p>
+
+        <h3>Writing &amp; drawing</h3>
+        <ul>
+          <li><strong>Pen / Highlighter</strong> — tap the active tool again for colors and sizes. Apple Pencil pressure shapes the ink.</li>
+          <li><strong>Shapes</strong> — draw a line, box, circle or triangle and hold the pen still: it snaps to a perfect shape.</li>
+          <li><strong>Palm rejection</strong> — turn on “Draw with Pencil only” in Settings. Then one finger scrolls and a pinch zooms while only the Pencil draws. Even with it off, fingers won’t draw while the Pencil is in use.</li>
+          <li><strong>Eraser</strong> — Precise mode erases just what’s under it (splitting strokes); tap the eraser tool again to switch modes or resize.</li>
+          <li><strong>Two-finger tap</strong> — undo. <strong>Three-finger tap</strong> — redo.</li>
+        </ul>
+
+        <h3>Selecting &amp; tidying</h3>
+        <ul>
+          <li><strong>Lasso</strong> — circle any ink, text or images, then drag to move them, use the corner handles to resize, or tap <em>Tidy</em> to smooth out messy handwriting.</li>
+          <li><strong>Copy / Delete / Color</strong> — from the bar above the selection.</li>
+        </ul>
+
+        <h3>Text &amp; Scribble</h3>
+        <p>With the Text tool, tap anywhere to place a text box. On iPad you can <strong>handwrite straight into a text box with the Pencil</strong> — iPadOS Scribble converts it to typed text on the device. That’s the cleanest “messy handwriting → neat text” path, and it never leaves your iPad.</p>
+
+        <h3>Photos</h3>
+        <p>Tap the photo button to insert images; drag to move, corner handles to resize. Images are stored inside the note on your device.</p>
+
+        <h3>Privacy</h3>
+        <p class="muted">No accounts. No tracking. No uploads. Notes live in your browser’s on-device storage — use Settings → “Back up all notes” to save them to a file, and “Protect storage” to ask the device to keep them safe. If you ever clear Safari website data, backed-up files are your safety net.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" role="status"></div>
+
+  <script src="./js/util.js"></script>
+  <script src="./js/ink.js"></script>
+  <script src="./js/store.js"></script>
+  <script src="./js/settings.js"></script>
+  <script src="./js/canvas.js"></script>
+  <script src="./js/editor.js"></script>
+  <script src="./js/home.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>
