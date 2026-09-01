@@ -48,6 +48,11 @@
       key: 'input.twoFingerUndo', label: 'Tap gestures', type: 'toggle', def: true,
       desc: 'Quick two-finger tap undoes, three-finger tap redoes.'
     },
+    {
+      key: 'sel.mode', label: 'Select tool style', type: 'select', def: 'lasso',
+      options: [['lasso', 'Freehand lasso'], ['rect', 'Rectangle drag']],
+      desc: 'How the select tool marks its area. Tap the select tool a second time to switch quickly.'
+    },
 
     { section: 'Ink defaults' },
     { key: 'ink.penColor', label: 'Pen color', type: 'color', def: '#1d1d2e' },

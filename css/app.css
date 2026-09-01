@@ -324,6 +324,8 @@ input, select { font: inherit; color: inherit; }
 }
 #selActions button:active { background: var(--bg-inset); }
 #selActions .danger { color: var(--danger); }
+#selActions .primary { color: var(--accent); }
+#selActions button[hidden] { display: none; }
 
 /* ============ popovers & menus ============ */
 
@@ -563,5 +565,4 @@ input.swatch.custom::-webkit-color-swatch { border: none; opacity: 0; }
   #ed-tools .icon-btn { width: 35px; height: 35px; }
   .icon-btn { width: 36px; height: 38px; }
   .bar-divider { display: none; }
-  #ed-tools [data-tool="hand"] { display: none; }
 }
