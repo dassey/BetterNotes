@@ -8,16 +8,32 @@
 
   /* ---------------- input smoothing (incremental EMA) ---------------- */
 
-  // Creates a stateful smoother; amount 0..1 (0 = raw, 1 = very smooth).
-  Ink.createSmoother = function (amount) {
-    const alpha = 1 - 0.82 * U.clamp(amount, 0, 1); // 1 → follow raw, 0.18 → heavy smoothing
+  // Creates a stateful stabilizer; amount 0..1 (0 = raw, 1 = very steady).
+  // Two layers: a pull-string dead zone (`ropeWorld` radius, world units) — the pen
+  // tip only moves once the pointer leaves it, so hand tremor inside it vanishes —
+  // plus an exponential smoothing pass for rounding.
+  Ink.createSmoother = function (amount, ropeWorld) {
+    const alpha = 1 - 0.8 * U.clamp(amount, 0, 1);
+    const rope = Math.max(0, ropeWorld || 0);
     let last = null;
     return {
       push(pt) {
         if (!last) { last = { x: pt.x, y: pt.y, p: pt.p }; return { ...last }; }
+        let tx = pt.x, ty = pt.y;
+        if (rope > 0) {
+          const dx = pt.x - last.x, dy = pt.y - last.y;
+          const d = Math.hypot(dx, dy);
+          if (d <= rope) {
+            tx = last.x; ty = last.y;
+          } else {
+            const k = (d - rope) / d;
+            tx = last.x + dx * k;
+            ty = last.y + dy * k;
+          }
+        }
         last = {
-          x: last.x + (pt.x - last.x) * alpha,
-          y: last.y + (pt.y - last.y) * alpha,
+          x: last.x + (tx - last.x) * alpha,
+          y: last.y + (ty - last.y) * alpha,
           p: last.p + (pt.p - last.p) * Math.min(1, alpha + 0.25)
         };
         return { ...last };
@@ -31,6 +47,7 @@
     if (pts.length < 3) return pts.slice();
     let out = U.rdp(pts, 0.35);
     if (smoothing > 0.55 && out.length > 3) out = U.chaikin(out);
+    if (smoothing >= 0.8 && out.length > 3) out = U.chaikin(out);
     return out;
   };
 
