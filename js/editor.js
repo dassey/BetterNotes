@@ -2012,6 +2012,9 @@
     }
   }
 
+  // Renders a thumbnail for any note (used for notes created outside the editor).
+  Editor.thumbnailFor = (n) => (renderer ? renderer.thumbnail(n) : Promise.resolve(null));
+
   // Introspection for tests/console; not used by the app itself.
   Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t });
 

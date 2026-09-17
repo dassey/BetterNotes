@@ -208,7 +208,7 @@ input, select { font: inherit; color: inherit; }
   text-overflow: ellipsis;
 }
 .note-sub { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
-.note-meta > div:first-child { flex: 1; min-width: 0; }
+.note-text { flex: 1; min-width: 0; }
 .note-menu { width: 32px; height: 32px; color: var(--text-dim); }
 
 #home-empty {

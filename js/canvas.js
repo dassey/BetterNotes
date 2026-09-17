@@ -333,7 +333,7 @@
       for (const it of note.items) bb = U.unionBBox(bb, BN.itemBBox(it));
       if (bb) {
         const w = Math.max(bb.w + 48, 320);
-        rect = { x: bb.x - 24, y: bb.y - 24, w, h: Math.max(160, Math.min(bb.h + 48, w * 1.3)) };
+        rect = { x: bb.x - 24, y: bb.y - 24, w, h: Math.max(bb.h + 48, w * 1.25) };
       } else {
         rect = { x: 0, y: 0, w: 800, h: 1000 };
       }

@@ -78,7 +78,9 @@
       mk(430, 'Open ⚙ Settings to tune everything: palm rejection, pressure, smoothing, paper, themes and backups.', 17),
       mk(500, 'Tip: tap the active pen tool again to pick colors and sizes.', 17, '#4f7cff')
     );
-    await BN.Store.saveNote(note, null);
+    let thumb = null;
+    try { thumb = await BN.Editor.thumbnailFor(note); } catch (e) { thumb = null; }
+    await BN.Store.saveNote(note, thumb);
   }
 
   /* ---------------- shell bindings ---------------- */
