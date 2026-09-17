@@ -46,8 +46,10 @@
       selActions: document.getElementById('selActions'),
       tools: document.getElementById('ed-tools'),
       imgInput: document.getElementById('imgInput'),
-      penBar: document.getElementById('penBar')
+      penBar: document.getElementById('penBar'),
+      zoomChip: document.getElementById('zoomChip')
     };
+    el.zoomChip.addEventListener('click', fitContent);
     renderer = new BN.Renderer(el.wrap, el.inkC, el.liveC);
     bindToolbar();
     bindPointerEvents();
@@ -110,6 +112,13 @@
   async function doSave(withThumb) {
     if (!note) return;
     note.view = { ...renderer.t };
+    if (note.title === 'Untitled note') {
+      const t = note.items.find((i) => i.type === 'text' && i.text && i.text.trim());
+      if (t) {
+        const first = t.text.trim().split('\n')[0].trim().slice(0, 40);
+        if (first) { note.title = first; el.title.value = first; }
+      }
+    }
     let thumb = null;
     const now = Date.now();
     if (withThumb === true || now - lastThumbAt > 6000) {
@@ -169,7 +178,34 @@
 
   const sharpRender = U.debounce(() => { if (note) renderAll(); }, 150);
 
+  let lastZoomLabel = '';
+  function updateZoomChip() {
+    if (!el.zoomChip || !note) return;
+    const label = Math.round(renderer.t.s * 100) + '%';
+    if (label !== lastZoomLabel) { lastZoomLabel = label; el.zoomChip.textContent = label; }
+  }
+
+  // Frames the content (infinite canvas) or fits the page width.
+  function fitContent() {
+    if (!note) return;
+    if (isInfinite() && contentBB) {
+      const pad = 60;
+      const s = U.clamp(Math.min(renderer.w / (contentBB.w + pad * 2), renderer.h / (contentBB.h + pad * 2)), MIN_S, MAX_S);
+      renderer.t = {
+        s,
+        x: (renderer.w - contentBB.w * s) / 2 - contentBB.x * s,
+        y: (renderer.h - contentBB.h * s) / 2 - contentBB.y * s
+      };
+    } else {
+      fitWidth();
+    }
+    clampT(renderer.t);
+    note.view = { ...renderer.t };
+    renderAll();
+  }
+
   function renderAll() {
+    updateZoomChip();
     if (cropState) {
       renderer.render(note, { skip: new Set([cropState.id]) });
       renderer.renderLive(drawCropOverlay);
@@ -1157,6 +1193,7 @@
 
   const gestureFrame = U.rafThrottle(() => {
     if (!note) return;
+    updateZoomChip();
     renderer.blit();
     renderer.renderLive(cropState ? drawCropOverlay : drawOverlays);
     updateTextLayerTransform();
@@ -1505,11 +1542,13 @@
         }
         if (item.tool === 'high') {
           ctx.globalAlpha = item.opacity ?? 0.35;
+          ctx.globalCompositeOperation = renderer.blendHigh || 'source-over';
           ctx.strokeStyle = item.color;
           ctx.lineWidth = item.size;
           ctx.lineCap = 'round'; ctx.lineJoin = 'round';
           ctx.stroke(Ink.centerlinePath(pts));
           ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = 'source-over';
         } else {
           ctx.fillStyle = item.color;
           ctx.fill(Ink.outlinePath(pts, item.size, item.pressure, { taper: S.get('input.taper') !== false && !action.snapped }));

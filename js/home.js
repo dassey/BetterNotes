@@ -69,7 +69,7 @@
     title.textContent = m.title || 'Untitled note';
     const sub = document.createElement('div');
     sub.className = 'note-sub';
-    sub.textContent = U.relativeTime(m.modified);
+    sub.textContent = 'Edited ' + U.relativeTime(m.modified);
     meta.appendChild(title);
     meta.appendChild(sub);
 

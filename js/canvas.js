@@ -111,13 +111,19 @@
     }
 
     const style = note.paper.style || 'blank';
-    if (style === 'blank') return;
+    if (style === 'blank') {
+      const c0 = paperColor;
+      const l0 = (0.299 * parseInt(c0.slice(1, 3), 16) + 0.587 * parseInt(c0.slice(3, 5), 16) + 0.114 * parseInt(c0.slice(5, 7), 16)) / 255;
+      this.blendHigh = l0 > 0.5 ? 'multiply' : 'source-over';
+      return;
+    }
     const spacing = note.paper.spacing || 32;
     // Skip rules that would be sub-pixel mush (dots earlier: unbounded grids get big).
     if (spacing * this.t.s < (style === 'dots' ? 6 : 3)) return;
     // Rule color adapts to paper lightness.
     const rgb = [parseInt(paperColor.slice(1, 3), 16), parseInt(paperColor.slice(3, 5), 16), parseInt(paperColor.slice(5, 7), 16)];
     const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+    this.blendHigh = lum > 0.5 ? 'multiply' : 'source-over';
     const rule = lum > 0.5 ? 'rgba(64,105,180,0.20)' : 'rgba(255,255,255,0.16)';
     ctx.save();
     if (!infinite) {
@@ -165,6 +171,7 @@
       if (item.tool === 'high') {
         ctx.save();
         ctx.globalAlpha = item.opacity ?? 0.35;
+        ctx.globalCompositeOperation = this.blendHigh || 'source-over';
         ctx.strokeStyle = item.color;
         ctx.lineWidth = item.size;
         ctx.lineCap = 'round';
@@ -333,8 +340,8 @@
     } else {
       rect = { x: 0, y: 0, w: note.width, h: Math.min(note.height, note.width * 1.25) };
     }
-    const canvas = await this.exportCanvas(note, rect, 260);
-    try { return canvas.toDataURL('image/jpeg', 0.8); } catch (e) { return null; }
+    const canvas = await this.exportCanvas(note, rect, 520);
+    try { return canvas.toDataURL('image/jpeg', 0.82); } catch (e) { return null; }
   };
 
   window.BN = window.BN || {};

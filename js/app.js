@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.6.0';
+  BN.VERSION = '0.7.0';
 
   let toastTimer = null;
 
@@ -19,6 +19,7 @@
     await firstRun();
     window.addEventListener('hashchange', route);
     await route();
+    document.body.classList.add('ready');
     // Ask the browser to protect our storage from eviction (silent if denied).
     BN.Store.requestPersistence();
     registerSW();
@@ -295,5 +296,8 @@
 
   window.BN = window.BN || {};
   window.BN.App = App;
-  window.addEventListener('DOMContentLoaded', () => App.boot());
+  window.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => document.body.classList.add('ready'), 1500); // never leave the page invisible
+    App.boot();
+  });
 })();
