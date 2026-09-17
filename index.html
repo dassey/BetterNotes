@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#f4f4f7">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="BetterNotes">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
@@ -32,12 +32,15 @@
       </button>
     </header>
     <div id="home-searchbar">
+      <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
       <input id="home-search" type="search" placeholder="Search notes" autocomplete="off">
     </div>
     <div id="home-scroll">
       <div id="note-grid"></div>
       <div id="home-empty" hidden>
-        No notes yet.<br>Tap <strong>+</strong> to start writing.
+        <svg viewBox="0 0 64 64" width="72" height="72" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"><rect x="14" y="8" width="36" height="48" rx="5"/><path d="M22 22h20M22 31h20M22 40h12"/><path d="M40 52l14-14 4 4-14 14h-4z" fill="var(--bg)"/></svg>
+        <p><strong>No notes yet</strong></p>
+        <p>Tap <strong>+</strong> to start writing.</p>
       </div>
     </div>
     <button id="home-fab" aria-label="New note">
@@ -104,6 +107,7 @@
 
     <div id="canvasWrap" data-tool="pen">
       <div id="penBar" hidden></div>
+      <button id="zoomChip" aria-label="Zoom level — tap to fit">100%</button>
       <canvas id="inkCanvas"></canvas>
       <div id="textLayer"></div>
       <canvas id="liveCanvas"></canvas>

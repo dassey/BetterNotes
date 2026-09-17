@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.6.0';
+  BN.VERSION = '0.7.0';
 
   let toastTimer = null;
 
@@ -19,6 +19,7 @@
     await firstRun();
     window.addEventListener('hashchange', route);
     await route();
+    document.body.classList.add('ready');
     // Ask the browser to protect our storage from eviction (silent if denied).
     BN.Store.requestPersistence();
     registerSW();
@@ -77,7 +78,9 @@
       mk(430, 'Open ⚙ Settings to tune everything: palm rejection, pressure, smoothing, paper, themes and backups.', 17),
       mk(500, 'Tip: tap the active pen tool again to pick colors and sizes.', 17, '#4f7cff')
     );
-    await BN.Store.saveNote(note, null);
+    let thumb = null;
+    try { thumb = await BN.Editor.thumbnailFor(note); } catch (e) { thumb = null; }
+    await BN.Store.saveNote(note, thumb);
   }
 
   /* ---------------- shell bindings ---------------- */
@@ -295,5 +298,8 @@
 
   window.BN = window.BN || {};
   window.BN.App = App;
-  window.addEventListener('DOMContentLoaded', () => App.boot());
+  window.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => document.body.classList.add('ready'), 1500); // never leave the page invisible
+    App.boot();
+  });
 })();

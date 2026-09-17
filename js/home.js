@@ -64,14 +64,17 @@
 
     const meta = document.createElement('div');
     meta.className = 'note-meta';
+    const text = document.createElement('div');
+    text.className = 'note-text';
     const title = document.createElement('div');
     title.className = 'note-title';
     title.textContent = m.title || 'Untitled note';
     const sub = document.createElement('div');
     sub.className = 'note-sub';
-    sub.textContent = U.relativeTime(m.modified);
-    meta.appendChild(title);
-    meta.appendChild(sub);
+    sub.textContent = 'Edited ' + U.relativeTime(m.modified);
+    text.appendChild(title);
+    text.appendChild(sub);
+    meta.appendChild(text);
 
     const menuBtn = document.createElement('button');
     menuBtn.className = 'icon-btn note-menu';
