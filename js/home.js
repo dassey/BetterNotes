@@ -7,6 +7,22 @@
   let el = {};
   let metas = [];
   let query = '';
+  let folder = '';            // '' = all notes
+  const FOLDERS_KEY = 'bn.folders';
+  const FOLDER_SEL_KEY = 'bn.home.folder';
+
+  function storedFolders() {
+    try { return JSON.parse(localStorage.getItem(FOLDERS_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function saveFolders(list) {
+    try { localStorage.setItem(FOLDERS_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+  }
+  function allFolders() {
+    const set = new Set(storedFolders());
+    for (const m of metas) if (m.folder) set.add(m.folder);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }
+  Home.currentFolder = () => folder;
 
   Home.init = function (appRef) {
     app = appRef;
@@ -16,8 +32,10 @@
       empty: document.getElementById('home-empty'),
       search: document.getElementById('home-search'),
       newBtn: document.getElementById('home-new'),
-      fab: document.getElementById('home-fab')
+      fab: document.getElementById('home-fab'),
+      folders: document.getElementById('home-folders')
     };
+    try { folder = localStorage.getItem(FOLDER_SEL_KEY) || ''; } catch (e) { folder = ''; }
     el.newBtn.addEventListener('click', () => app.createNote());
     el.fab.addEventListener('click', () => app.createNote());
     el.search.addEventListener('input', () => { query = el.search.value.toLowerCase(); renderGrid(); });
@@ -36,8 +54,82 @@
     renderGrid();
   };
 
+  function renderFolders() {
+    const bar = el.folders;
+    bar.innerHTML = '';
+    const names = allFolders();
+    if (folder && !names.includes(folder)) folder = '';
+    const chip = (label, value, extra) => {
+      const b = document.createElement('button');
+      b.className = 'folder-chip' + (value === folder ? ' active' : '') + (extra ? ' ' + extra : '');
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        if (value === folder && value) { openFolderMenu(b, value); return; }
+        folder = value;
+        try { localStorage.setItem(FOLDER_SEL_KEY, folder); } catch (e) { /* ignore */ }
+        renderFolders();
+        renderGrid();
+      });
+      return b;
+    };
+    bar.appendChild(chip('All notes', ''));
+    for (const n of names) bar.appendChild(chip(n, n));
+    const add = chip('+ Folder', null, 'add');
+    add.onclick = async () => {
+      const name = await app.prompt('New folder', '');
+      if (name === null) return;
+      const clean = name.trim().slice(0, 40);
+      if (!clean) return;
+      const list = storedFolders();
+      if (!list.includes(clean)) { list.push(clean); saveFolders(list); }
+      folder = clean;
+      try { localStorage.setItem(FOLDER_SEL_KEY, folder); } catch (e) { /* ignore */ }
+      renderFolders();
+      renderGrid();
+    };
+    bar.appendChild(add);
+  }
+
+  function openFolderMenu(anchor, name) {
+    app.openMenuAt(anchor, [
+      ['Rename folder', async () => {
+        const nn = await app.prompt('Rename folder', name);
+        if (nn === null) return;
+        const clean = nn.trim().slice(0, 40);
+        if (!clean || clean === name) return;
+        for (const m of metas) {
+          if (m.folder === name) { const n = await BN.Store.getNote(m.id); n.folder = clean; await BN.Store.saveNote(n, m.thumb); }
+        }
+        saveFolders(storedFolders().map((f) => (f === name ? clean : f)));
+        folder = clean;
+        try { localStorage.setItem(FOLDER_SEL_KEY, folder); } catch (e) { /* ignore */ }
+        Home.refresh();
+      }],
+      ['Delete folder (keep notes)', async () => {
+        for (const m of metas) {
+          if (m.folder === name) { const n = await BN.Store.getNote(m.id); n.folder = ''; await BN.Store.saveNote(n, m.thumb); }
+        }
+        saveFolders(storedFolders().filter((f) => f !== name));
+        folder = '';
+        try { localStorage.setItem(FOLDER_SEL_KEY, ''); } catch (e) { /* ignore */ }
+        Home.refresh();
+      }, true]
+    ]);
+  }
+
+  async function moveToFolder(m, target) {
+    const n = await BN.Store.getNote(m.id);
+    if (!n) return;
+    n.folder = target || '';
+    await BN.Store.saveNote(n, m.thumb);
+    if (target && !storedFolders().includes(target)) saveFolders([...storedFolders(), target]);
+    Home.refresh();
+  }
+
   function renderGrid() {
-    const list = query ? metas.filter((m) => (m.title || '').toLowerCase().includes(query)) : metas;
+    renderFolders();
+    let list = folder ? metas.filter((m) => m.folder === folder) : metas;
+    list = query ? list.filter((m) => (m.title || '').toLowerCase().includes(query)) : list;
     el.grid.innerHTML = '';
     el.empty.hidden = list.length > 0;
     for (const m of list) el.grid.appendChild(card(m));
@@ -100,6 +192,17 @@
         Home.refresh();
       }],
       ['Duplicate', async () => { await BN.Store.duplicateNote(m.id); Home.refresh(); }],
+      ['Move to folder…', () => {
+        const entries = allFolders().filter((f) => f !== m.folder).map((f) => [f, () => moveToFolder(m, f)]);
+        entries.push(['New folder…', async () => {
+          const name = await app.prompt('New folder', '');
+          if (name === null) return;
+          const clean = name.trim().slice(0, 40);
+          if (clean) moveToFolder(m, clean);
+        }]);
+        if (m.folder) entries.push(['Remove from "' + m.folder + '"', () => moveToFolder(m, '')]);
+        app.openMenuAt(anchor, entries);
+      }],
       ['Back up (file)', async () => {
         const data = await BN.Store.exportBackup([m.id]);
         app.downloadJSON(data, (m.title || 'note').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').slice(0, 40) + '.betternotes.json');

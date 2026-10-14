@@ -21,6 +21,9 @@
   let touchTap = null;          // multi-finger tap candidate (2 = undo, 3 = redo)
   let lastPenAt = 0;            // pen-priority palm rejection window
   let cropState = null;         // active image-crop session
+  let laserTrail = [];          // fading laser-pointer points (never saved)
+  let rec = null;               // active audio recording session
+  let playback = null;          // active recording playback {clip, index, audio, url}
   let contentBB = null;         // cached union bbox of all items
 
   const isInfinite = () => !!note && (note.paper.layout || 'page') === 'infinite';
@@ -47,8 +50,12 @@
       tools: document.getElementById('ed-tools'),
       imgInput: document.getElementById('imgInput'),
       penBar: document.getElementById('penBar'),
-      zoomChip: document.getElementById('zoomChip')
+      zoomChip: document.getElementById('zoomChip'),
+      recordBtn: document.getElementById('ed-record'),
+      recPill: document.getElementById('recPill'),
+      audioBar: document.getElementById('audioBar')
     };
+    bindAudioBar();
     el.zoomChip.addEventListener('click', fitContent);
     renderer = new BN.Renderer(el.wrap, el.inkC, el.liveC);
     bindToolbar();
@@ -57,7 +64,7 @@
     makeAutosave();
     document.addEventListener('bn:settings-changed', (e) => {
       if (e.detail.key === 'storage.autosaveMs') makeAutosave();
-      if ((e.detail.key.startsWith('appearance.') || e.detail.key === 'input.taper') && note) renderAll();
+      if ((e.detail.key.startsWith('appearance.') || e.detail.key === 'input.taper') && note) { renderAll(); if (e.detail.key === 'appearance.autoInk') rebuildTextLayer(); }
       if (['ink.penColor', 'ink.penSize', 'pens.saved', 'pens.showBar'].includes(e.detail.key)) renderPenBar();
       updateToolIndicators();
     });
@@ -91,6 +98,7 @@
     renderAll();
     setTool(tool || 'pen');
     renderPenBar();
+    if (note.audio && note.audio.length) showAudioBar(note.audio.length - 1); else hideAudioBar();
     updateUndoButtons();
   };
 
@@ -98,6 +106,8 @@
     if (!note) return;
     closePopover();
     cancelCrop();
+    await stopRecording();
+    hideAudioBar();
     commitFocusedText();
     autosave.cancel();
     await doSave(true);
@@ -206,6 +216,11 @@
 
   function renderAll() {
     updateZoomChip();
+    const rp = renderer.replay;
+    for (const div of el.textLayer.children) {
+      const it = byId(div.dataset.id);
+      div.classList.toggle('replay-future', !!(rp && it && it.at && it.at.c === rp.c && it.at.t > rp.t));
+    }
     if (cropState) {
       renderer.render(note, { skip: new Set([cropState.id]) });
       renderer.renderLive(drawCropOverlay);
@@ -570,7 +585,7 @@
     div.style.top = item.y + 'px';
     div.style.width = item.w + 'px';
     div.style.fontSize = item.size + 'px';
-    div.style.color = item.color;
+    div.style.color = renderer.inkColor(item.color);
     div.innerText = item.text || '';
     let beforeText = null;
     let committed = !!(item.text && item.text.length);
@@ -627,6 +642,7 @@
       color: S.get('ink.penColor'),
       text: ''
     };
+    stampRecording(item);
     note.items.push(item); // op is pushed on first real input
     const div = buildTextEl(item);
     requestAnimationFrame(() => div.focus());
@@ -651,6 +667,7 @@
         w, h, blob
       };
       renderer.images.set(item.id, { ready: true, bmp });
+      stampRecording(item);
       note.items.push(item);
       pushOp(opAdd([item]));
       setTool('select');
@@ -659,6 +676,221 @@
     } catch (e) {
       app.toast('Could not read that image', true);
     }
+  }
+
+  /* =================== read as text (iPadOS Live Text on an image of the ink) =================== */
+
+  let readAnchor = null; // world rect the text box should land in
+
+  function openReadAsText() {
+    const items = selectedItems().filter((i) => i.type !== 'text');
+    if (!items.length || !selection || !selection.bbox) return;
+    const bb = selection.bbox;
+    const rect = { x: bb.x - 16, y: bb.y - 16, w: bb.w + 32, h: bb.h + 32 };
+    const scale = Math.min(3, 2400 / Math.max(rect.w, 1), 2400 / Math.max(rect.h, 1));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.ceil(rect.w * scale));
+    c.height = Math.max(1, Math.ceil(rect.h * scale));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.setTransform(scale, 0, 0, scale, -rect.x * scale, -rect.y * scale);
+    const savedLum = renderer.paperLum, savedBlend = renderer.blendHigh;
+    renderer.paperLum = 1; renderer.blendHigh = 'multiply';
+    for (const it of items) renderer.drawItem(ctx, it);
+    renderer.paperLum = savedLum; renderer.blendHigh = savedBlend;
+    readAnchor = { x: bb.x, y: bb.y, w: Math.max(bb.w, 220) };
+    document.getElementById('read-img').src = c.toDataURL('image/png');
+    document.getElementById('read-modal').classList.add('open');
+  }
+
+  function closeReadAsText() {
+    document.getElementById('read-modal').classList.remove('open');
+  }
+
+  async function pasteAsTextBox() {
+    if (!note || !readAnchor) return;
+    let text = '';
+    try { text = (navigator.clipboard && navigator.clipboard.readText) ? await navigator.clipboard.readText() : ''; }
+    catch (e) { text = ''; }
+    text = (text || '').trim();
+    if (!text) { app.toast('Copy the text first: long-press the image, select it, then Copy', true); return; }
+    const size = 18;
+    const item = {
+      id: U.uid(), type: 'text', x: readAnchor.x, y: readAnchor.y, w: readAnchor.w, h: size * 1.5, size,
+      color: S.get('ink.penColor'), text
+    };
+    stampRecording(item);
+    note.items.push(item);
+    pushOp(opAdd([item]));
+    buildTextEl(item);
+    closeReadAsText();
+    setTool('select');
+    setSelection([item.id]);
+    renderAll();
+    app.toast('Text box added');
+  }
+
+  /* =================== audio recording (synced to ink) =================== */
+
+  function stampRecording(item) {
+    if (rec) item.at = { c: rec.clipId, t: Date.now() - rec.startedAt };
+  }
+
+  function fmtTime(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  async function toggleRecording() {
+    if (rec) { stopRecording(); return; }
+    if (!note) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined') {
+      app.toast('Recording is not supported in this browser', true);
+      return;
+    }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { app.toast('Microphone access was denied', true); return; }
+    const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg']
+      .find((m) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+    const opts = { audioBitsPerSecond: parseInt(S.get('audio.bitrate'), 10) || 64000 };
+    if (mime) opts.mimeType = mime;
+    let recorder;
+    try { recorder = new MediaRecorder(stream, opts); } catch (e) { recorder = new MediaRecorder(stream); }
+    const chunks = [];
+    recorder.addEventListener('dataavailable', (e) => { if (e.data && e.data.size) chunks.push(e.data); });
+    recorder.addEventListener('stop', () => finalizeRecording(chunks, recorder.mimeType || mime));
+    stopPlayback();
+    rec = { recorder, stream, chunks, clipId: U.uid(), startedAt: Date.now(), timer: null, resolve: null };
+    recorder.start(1000);
+    el.recordBtn.classList.add('recording');
+    el.recPill.hidden = false;
+    rec.timer = setInterval(updateRecPill, 500);
+    updateRecPill();
+  }
+
+  function updateRecPill() {
+    if (!rec) return;
+    el.recPill.querySelector('span').textContent = fmtTime(Date.now() - rec.startedAt);
+  }
+
+  function stopRecording() {
+    if (!rec) return Promise.resolve();
+    const r = rec;
+    const done = new Promise((res) => { r.resolve = res; });
+    try { r.recorder.stop(); } catch (e) { finalizeRecording(r.chunks, ''); }
+    return done;
+  }
+
+  function finalizeRecording(chunks, mime) {
+    const r = rec;
+    if (!r) return;
+    rec = null;
+    clearInterval(r.timer);
+    r.stream.getTracks().forEach((t) => t.stop());
+    el.recordBtn.classList.remove('recording');
+    el.recPill.hidden = true;
+    const duration = Date.now() - r.startedAt;
+    if (chunks.length && note) {
+      const blob = new Blob(chunks, { type: mime || chunks[0].type || 'audio/webm' });
+      note.audio = note.audio || [];
+      note.audio.push({ id: r.clipId, blob, mime: blob.type, duration, created: r.startedAt });
+      markDirty();
+      app.toast('Recording saved (' + fmtTime(duration) + ')');
+      showAudioBar(note.audio.length - 1);
+    } else {
+      app.toast('Nothing was recorded');
+    }
+    if (r.resolve) r.resolve();
+  }
+
+  function showAudioBar(index) {
+    if (!note || !note.audio || !note.audio.length) { hideAudioBar(); return; }
+    index = U.clamp(index == null ? note.audio.length - 1 : index, 0, note.audio.length - 1);
+    stopPlayback();
+    const clip = note.audio[index];
+    const url = URL.createObjectURL(clip.blob);
+    const audio = new Audio(url);
+    audio.preload = 'metadata';
+    playback = { clip, index, audio, url };
+    audio.addEventListener('timeupdate', onAudioTime);
+    audio.addEventListener('play', () => setPlayIcon(true));
+    audio.addEventListener('pause', () => setPlayIcon(false));
+    audio.addEventListener('ended', () => { setPlayIcon(false); renderer.replay = null; if (note) renderAll(); });
+    const bar = el.audioBar;
+    bar.hidden = false;
+    bar.querySelector('.ab-label').textContent = note.audio.length > 1 ? `Recording ${index + 1} of ${note.audio.length}` : 'Recording';
+    bar.querySelector('.ab-time').textContent = '0:00 / ' + fmtTime(clip.duration);
+    const range = bar.querySelector('input');
+    range.max = Math.max(1, Math.round(clip.duration / 1000));
+    range.value = 0;
+    bar.querySelector('.ab-prev').disabled = index === 0;
+    bar.querySelector('.ab-next').disabled = index >= note.audio.length - 1;
+    setPlayIcon(false);
+  }
+
+  function hideAudioBar() {
+    stopPlayback();
+    if (el.audioBar) el.audioBar.hidden = true;
+  }
+
+  function stopPlayback() {
+    if (!playback) return;
+    try { playback.audio.pause(); } catch (e) { /* ignore */ }
+    URL.revokeObjectURL(playback.url);
+    playback = null;
+    if (renderer.replay) { renderer.replay = null; if (note) renderAll(); }
+  }
+
+  function setPlayIcon(playing) {
+    const b = el.audioBar.querySelector('.ab-play');
+    b.textContent = playing ? '❚❚' : '▶';
+    b.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  }
+
+  const onAudioTime = U.rafThrottle(() => {
+    if (!playback || !note) return;
+    const t = playback.audio.currentTime * 1000;
+    el.audioBar.querySelector('input').value = Math.round(t / 1000);
+    el.audioBar.querySelector('.ab-time').textContent = fmtTime(t) + ' / ' + fmtTime(playback.clip.duration);
+    renderer.replay = { c: playback.clip.id, t };
+    renderAll();
+  });
+
+  function seekToInkAt(w) {
+    const it = hitTestItem(w);
+    if (!it || !it.at || !playback || it.at.c !== playback.clip.id) return;
+    playback.audio.currentTime = it.at.t / 1000;
+    onAudioTime();
+    if (playback.audio.paused) playback.audio.play().catch(() => { });
+  }
+
+  function bindAudioBar() {
+    const bar = el.audioBar;
+    if (!bar) return;
+    bar.querySelector('.ab-play').addEventListener('click', () => {
+      if (!playback) return;
+      if (playback.audio.paused) playback.audio.play().catch(() => app.toast('Could not play the recording', true));
+      else playback.audio.pause();
+    });
+    bar.querySelector('input').addEventListener('input', (e) => {
+      if (!playback) return;
+      playback.audio.currentTime = +e.target.value;
+      onAudioTime();
+    });
+    bar.querySelector('.ab-prev').addEventListener('click', () => { if (playback) showAudioBar(playback.index - 1); });
+    bar.querySelector('.ab-next').addEventListener('click', () => { if (playback) showAudioBar(playback.index + 1); });
+    bar.querySelector('.ab-close').addEventListener('click', hideAudioBar);
+    bar.querySelector('.ab-del').addEventListener('click', async () => {
+      if (!playback) return;
+      const ok = await app.confirm('Delete this recording?', 'The audio is removed from this note. Your ink stays.');
+      if (!ok || !playback || !note) return;
+      const idx = playback.index;
+      note.audio.splice(idx, 1);
+      markDirty();
+      if (note.audio.length) showAudioBar(Math.min(idx, note.audio.length - 1)); else hideAudioBar();
+    });
   }
 
   /* =================== image crop =================== */
@@ -780,6 +1012,7 @@
       document.getElementById(id).hidden = cropping;
     }
     document.getElementById('sel-crop').hidden = cropping || !singleImage;
+    document.getElementById('sel-read').hidden = cropping || !items.some((i) => i.type !== 'text');
     document.getElementById('sel-crop-done').hidden = !cropping;
     document.getElementById('sel-crop-cancel').hidden = !cropping;
   }
@@ -900,6 +1133,11 @@
         break;
       case 'hand':
         startPan(); break;
+      case 'laser':
+        action = { kind: 'laser', pid: e.pointerId };
+        laserTrail.push({ x: w.x, y: w.y, t: performance.now() });
+        startLiveLoop();
+        break;
     }
   }
 
@@ -1138,6 +1376,12 @@
           const div = el.textLayer.querySelector(`[data-id="${it.id}"]`);
           if (div) { div.style.left = r.x + 'px'; div.style.width = r.w + 'px'; }
         }
+        break;
+      }
+      case 'laser': {
+        if (e.pointerId !== action.pid) return;
+        const w = renderer.worldFromScreen(s.x, s.y);
+        laserTrail.push({ x: w.x, y: w.y, t: performance.now() });
         break;
       }
       case 'cropDrag': {
@@ -1411,6 +1655,11 @@
         renderAll();
         break;
       }
+      case 'laser':
+        if (e.pointerId !== action.pid) return;
+        action = null;
+        startLiveLoop();
+        break;
       case 'cropDrag':
         if (e.pointerId !== action.pid) return;
         action = null;
@@ -1430,6 +1679,7 @@
         action = null;
         note.view = { ...renderer.t };
         sharpRender();
+        if (playback && U.dist(p.sx, p.sy, p.x, p.y) < 6) seekToInkAt(renderer.worldFromScreen(p.sx, p.sy));
         break;
       case 'pinch':
         if (touchPointers().length < 2) {
@@ -1478,6 +1728,7 @@
     }
     delete item._bb;
     if (item.points.length === 0) { renderer.renderLive(drawOverlays); return; }
+    stampRecording(item);
     note.items.push(item);
     pushOp(opAdd([item]));
     renderAll();
@@ -1517,7 +1768,37 @@
     liveRunning = true;
     requestAnimationFrame(liveFrame);
   }
+  function drawLaser(ctx) {
+    const now = performance.now();
+    while (laserTrail.length && now - laserTrail[0].t > 900) laserTrail.shift();
+    if (laserTrail.length < 1) return;
+    const t = renderer.t;
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let i = 1; i < laserTrail.length; i++) {
+      const a = laserTrail[i - 1], b = laserTrail[i];
+      const age = (now - b.t) / 900;
+      const alpha = Math.max(0, 1 - age);
+      ctx.strokeStyle = `rgba(255,45,85,${(alpha * 0.25).toFixed(3)})`;
+      ctx.lineWidth = 14 / t.s;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.strokeStyle = `rgba(255,45,85,${alpha.toFixed(3)})`;
+      ctx.lineWidth = 4 / t.s;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    const tip = laserTrail[laserTrail.length - 1];
+    ctx.fillStyle = 'rgba(255,45,85,0.95)';
+    ctx.beginPath(); ctx.arc(tip.x, tip.y, 5 / t.s, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
   function liveFrame() {
+    const laserActive = action && action.kind === 'laser';
+    if (laserActive || (!action && laserTrail.length)) {
+      renderer.renderLive((ctx) => { drawOverlays(ctx); drawLaser(ctx); });
+      requestAnimationFrame(liveFrame);
+      return;
+    }
     if (!note || !action || !['draw', 'erase', 'lasso', 'moveSel', 'scaleSel', 'stretchSel'].includes(action.kind)) {
       liveRunning = false;
       if (note) { renderer.renderLive(cropState ? drawCropOverlay : drawOverlays); positionSelActions(); }
@@ -1550,11 +1831,11 @@
           ctx.globalAlpha = 1;
           ctx.globalCompositeOperation = 'source-over';
         } else {
-          ctx.fillStyle = item.color;
+          ctx.fillStyle = renderer.inkColor(item.color);
           ctx.fill(Ink.outlinePath(pts, item.size, item.pressure, { taper: S.get('input.taper') !== false && !action.snapped }));
           if (!action.snapped && action.predicted.length) {
             const lp = item.points[item.points.length - 1];
-            ctx.strokeStyle = item.color;
+            ctx.strokeStyle = renderer.inkColor(item.color);
             ctx.lineWidth = Ink.widthAt(lp.p, item.size, item.pressure);
             ctx.lineCap = 'round'; ctx.lineJoin = 'round';
             ctx.beginPath();
@@ -1726,12 +2007,17 @@
     });
     document.getElementById('ed-paper').addEventListener('click', (e) => openPaperOptions(e.currentTarget));
     document.getElementById('ed-export').addEventListener('click', (e) => openExportMenu(e.currentTarget));
+    el.recordBtn.addEventListener('click', toggleRecording);
     document.getElementById('ed-settings').addEventListener('click', () => app.openSettings());
 
     // selection actions
     document.getElementById('sel-tidy').addEventListener('click', tidySelection);
     document.getElementById('sel-color').addEventListener('click', (e) => openSelectionColor(e.currentTarget));
     document.getElementById('sel-crop').addEventListener('click', startCrop);
+    document.getElementById('sel-read').addEventListener('click', openReadAsText);
+    document.getElementById('read-close').addEventListener('click', closeReadAsText);
+    document.getElementById('read-paste').addEventListener('click', pasteAsTextBox);
+    document.getElementById('read-modal').addEventListener('pointerdown', (e) => { if (e.target === e.currentTarget) closeReadAsText(); });
     document.getElementById('sel-crop-done').addEventListener('click', commitCrop);
     document.getElementById('sel-crop-cancel').addEventListener('click', cancelCrop);
     document.getElementById('sel-dup').addEventListener('click', duplicateSelection);
@@ -1927,7 +2213,7 @@
         clampT(renderer.t);
         paperChanged();
       }));
-      const styles = [['lines', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['blank', 'Blank']];
+      const styles = [['lines', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['cornell', 'Cornell'], ['music', 'Music'], ['blank', 'Blank']];
       const seg = document.createElement('div');
       seg.className = 'segmented';
       for (const [v, label] of styles) {
@@ -1951,6 +2237,7 @@
   }
   function paperChanged() {
     renderAll();
+    rebuildTextLayer();
     markDirty();
   }
 
@@ -1976,6 +2263,7 @@
       };
       add('Share image — visible area', () => exportImage(false));
       add('Share image — whole note', () => exportImage(true));
+      add('Print / Save as PDF…', () => printNote());
       add('Back up this note (file)', async () => {
         await Editor.flush();
         const data = await BN.Store.exportBackup([note.id]);
@@ -1983,6 +2271,46 @@
       });
       pop.appendChild(menu);
     });
+  }
+
+  // Slices the note into A4-proportioned pages rendered as images and hands them to
+  // the system print dialog (which on iOS/macOS can save straight to PDF).
+  async function buildPrintPages() {
+    const root = document.getElementById('printRoot');
+    root.innerHTML = '';
+    let area;
+    if (isInfinite()) {
+      const bb = contentBB || { x: 0, y: 0, w: 800, h: 1100 };
+      area = { x: bb.x - 40, y: bb.y - 40, w: Math.max(bb.w + 80, 800), h: bb.h + 80 };
+    } else {
+      area = { x: 0, y: 0, w: note.width, h: note.height };
+    }
+    const pageW = area.w, pageH = area.w * 1.4142;
+    const pages = Math.max(1, Math.min(60, Math.ceil(area.h / pageH)));
+    for (let i = 0; i < pages; i++) {
+      const rect = { x: area.x, y: area.y + i * pageH, w: pageW, h: pageH };
+      const canvas = await renderer.exportCanvas(note, rect, 1600);
+      const img = document.createElement('img');
+      img.src = canvas.toDataURL('image/jpeg', 0.9);
+      root.appendChild(img);
+    }
+    return pages;
+  }
+  Editor.buildPrintPages = buildPrintPages;
+
+  async function printNote() {
+    try {
+      commitFocusedText();
+      app.toast('Preparing pages…');
+      const n = await buildPrintPages();
+      if (typeof window.print !== 'function') { app.toast('Printing is not available here', true); return; }
+      const cleanup = () => { document.getElementById('printRoot').innerHTML = ''; window.removeEventListener('afterprint', cleanup); };
+      window.addEventListener('afterprint', cleanup);
+      setTimeout(() => window.print(), 50);
+      app.toast(n + (n === 1 ? ' page ready' : ' pages ready') + ' — choose Save as PDF in the print sheet');
+    } catch (e) {
+      app.toast('Could not prepare pages', true);
+    }
   }
 
   function sanitizeName(s) {
@@ -2016,7 +2344,7 @@
   Editor.thumbnailFor = (n) => (renderer ? renderer.thumbnail(n) : Promise.resolve(null));
 
   // Introspection for tests/console; not used by the app itself.
-  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t });
+  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t, recording: !!rec, playback: playback ? { index: playback.index, paused: playback.audio.paused } : null, replay: renderer && renderer.replay });
 
   window.BN = window.BN || {};
   window.BN.Editor = Editor;

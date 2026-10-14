@@ -35,6 +35,7 @@
       <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
       <input id="home-search" type="search" placeholder="Search notes" autocomplete="off">
     </div>
+    <div id="home-folders"></div>
     <div id="home-scroll">
       <div id="note-grid"></div>
       <div id="home-empty" hidden>
@@ -90,6 +91,9 @@
         <button class="icon-btn" id="ed-image" aria-label="Insert photo">
           <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="8.7" cy="9.7" r="1.5"/><path d="M6 16.5 10.5 12l3.4 3.7 2.3-2.4 2.8 3.2"/></svg>
         </button>
+        <button class="icon-btn" data-tool="laser" aria-label="Laser pointer">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.5v2.5M12 18v2.5M3.5 12H6M18 12h2.5M6 6l1.8 1.8M16.2 16.2 18 18M18 6l-1.8 1.8M7.8 16.2 6 18"/></svg>
+        </button>
         <button class="icon-btn" data-tool="hand" aria-label="Pan">
           <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18"/><path d="m9 5.5 3-3 3 3M9 18.5l3 3 3-3M5.5 9l-3 3 3 3M18.5 9l3 3-3 3"/></svg>
         </button>
@@ -97,6 +101,9 @@
 
       <div class="bar-divider" id="ed-d2"></div>
 
+      <button id="ed-record" class="icon-btn" aria-label="Record audio">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21M9 21h6"/></svg>
+      </button>
       <button id="ed-paper" class="icon-btn" aria-label="Paper style">
         <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4.5"/></svg>
       </button>
@@ -108,6 +115,19 @@
     <div id="canvasWrap" data-tool="pen">
       <div id="penBar" hidden></div>
       <button id="zoomChip" aria-label="Zoom level — tap to fit">100%</button>
+      <div id="recPill" hidden><i></i><span>0:00</span></div>
+      <div id="audioBar" hidden>
+        <button class="ab-play" aria-label="Play">▶</button>
+        <input type="range" min="0" max="1" value="0" aria-label="Scrub recording">
+        <span class="ab-time">0:00</span>
+        <span class="ab-label">Recording</span>
+        <button class="ab-prev" aria-label="Previous recording">‹</button>
+        <button class="ab-next" aria-label="Next recording">›</button>
+        <button class="ab-del" aria-label="Delete recording">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l.8 13h9.4l.8-13"/></svg>
+        </button>
+        <button class="ab-close" aria-label="Close player">✕</button>
+      </div>
       <canvas id="inkCanvas"></canvas>
       <div id="textLayer"></div>
       <canvas id="liveCanvas"></canvas>
@@ -115,6 +135,7 @@
         <button id="sel-tidy">Tidy</button>
         <button id="sel-color">Color</button>
         <button id="sel-crop" hidden>Crop</button>
+        <button id="sel-read" hidden>Read</button>
         <button id="sel-dup">Copy</button>
         <button id="sel-del" class="danger">Delete</button>
         <button id="sel-crop-done" class="primary" hidden>Done</button>
@@ -167,13 +188,22 @@
           <li><strong>Select</strong> — circle any ink, text or images (or tap the select tool a second time to switch to rectangle drag), then drag to move, use the corner handles to resize, or tap <em>Tidy</em> to smooth out messy handwriting.</li>
           <li><strong>Copy / Delete / Color</strong> — from the bar above the selection. A single tap picks one item; tap empty space to clear the selection.</li>
           <li><strong>Hand tool</strong> — pick it when you want nothing armed: every finger or pen touch just pans, nothing draws or selects.</li>
+          <li><strong>Read as text</strong> — select handwriting and tap <em>Read</em>: the app shows it as an image that iPadOS can read with a touch-and-hold (Live Text). Copy the words, then <em>Paste as text box</em>.</li>
+          <li><strong>Laser pointer</strong> — a glowing, fading trail for pointing things out while presenting or studying together; it's never saved.</li>
+          <li><strong>Paper</strong> — lined, grid, dots, <em>Cornell</em> (cue column + summary band) and <em>music staff</em>, per note from the paper menu.</li>
         </ul>
 
         <h3>Text &amp; Scribble</h3>
         <p>With the Text tool, tap anywhere to place a text box. On iPad you can <strong>handwrite straight into a text box with the Pencil</strong> — iPadOS Scribble converts it to typed text on the device. That’s the cleanest “messy handwriting → neat text” path, and it never leaves your iPad.</p>
 
+        <h3>Recording a lecture</h3>
+        <p>Tap the microphone, then write as usual — everything you write while recording is <strong>time-stamped to the audio</strong>. Later, press play: your notes dim and reappear in sync, and tapping any word with the hand tool jumps the recording to the moment you wrote it. Recordings live inside the note on your device, never uploaded.</p>
+
         <h3>Photos</h3>
         <p>Tap the photo button to insert images; drag to move. <strong>Corner handles</strong> resize keeping proportions; <strong>side handles</strong> stretch one direction freely. Select a photo and tap <strong>Crop</strong> to trim it — the crop is non-destructive, so cropping again can bring the edges back. (A selected text box gets side handles too, for its wrap width.) Images are stored inside the note on your device.</p>
+
+        <h3>Folders &amp; printing</h3>
+        <p>Use the folder chips on the home screen to sort notes by subject (tap an active chip to rename or delete it); a note's ⋯ menu moves it. <strong>Share → Print / Save as PDF</strong> turns any note into clean A4 pages through the system print sheet — pick <em>Save as PDF</em> there — with no extra software involved.</p>
 
         <h3>Privacy</h3>
         <p class="muted">No accounts. No tracking. No uploads. Notes live in your browser’s on-device storage — use Settings → “Back up all notes” to save them to a file, and “Protect storage” to ask the device to keep them safe. If you ever clear Safari website data, backed-up files are your safety net.</p>
@@ -181,6 +211,27 @@
     </div>
   </div>
 
+  <!-- ============ Read as text ============ -->
+  <div id="read-modal" class="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Read as text</h2>
+        <button id="read-close" class="icon-btn" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body read-body">
+        <p class="read-hint">On iPad or iPhone, <strong>touch and hold the handwriting below</strong> — the device reads it on-device (Live Text). Select the words, tap <strong>Copy</strong>, then press the button to drop them into your note as typed text.</p>
+        <div class="read-img-wrap"><img id="read-img" alt="Your handwriting, ready to be read"></div>
+        <div class="dialog-row">
+          <button id="read-paste" class="btn btn-primary">Paste as text box</button>
+        </div>
+        <p class="set-info">Nothing leaves your device — recognition is done by iPadOS itself.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="printRoot" aria-hidden="true"></div>
   <div id="toast" role="status"></div>
 
   <script src="./js/util.js"></script>

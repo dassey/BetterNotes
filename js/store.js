@@ -57,7 +57,7 @@
     await reqP(tx('notes', 'readwrite').put(clone));
     const meta = {
       id: note.id, title: note.title, created: note.created, modified: note.modified,
-      items: note.items.length, thumb: thumbDataURL || (await Store.getMeta(note.id))?.thumb || null
+      folder: note.folder || '', items: note.items.length, thumb: thumbDataURL || (await Store.getMeta(note.id))?.thumb || null
     };
     await reqP(tx('meta', 'readwrite').put(meta));
     return meta;
@@ -103,6 +103,11 @@
           delete it.blob;
         }
       }
+      if (Array.isArray(n.audio)) {
+        for (const a of n.audio) {
+          if (a.blob) { a.dataURL = await U.blobToDataURL(a.blob); delete a.blob; }
+        }
+      }
       notes.push(n);
     }
     return { app: 'BetterNotes', format: 1, exported: Date.now(), notes };
@@ -121,6 +126,11 @@
         if (it.type === 'image' && it.dataURL) {
           it.blob = await U.dataURLToBlob(it.dataURL);
           delete it.dataURL;
+        }
+      }
+      if (Array.isArray(note.audio)) {
+        for (const a of note.audio) {
+          if (a.dataURL) { a.blob = await U.dataURLToBlob(a.dataURL); delete a.dataURL; }
         }
       }
       await Store.saveNote(note, null);

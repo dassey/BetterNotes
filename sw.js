@@ -2,7 +2,7 @@
    offline; cache-first for app files, no runtime requests to anywhere else. */
 'use strict';
 
-const VERSION = 'bn-v0.7.0';
+const VERSION = 'bn-v0.8.0';
 const ASSETS = [
   './',
   './index.html',

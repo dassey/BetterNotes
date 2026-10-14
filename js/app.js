@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.7.0';
+  BN.VERSION = '0.8.0';
 
   let toastTimer = null;
 
@@ -55,6 +55,7 @@
       color: BN.Settings.get('paper.color'),
       layout: BN.Settings.get('paper.layout')
     });
+    if (BN.Home.currentFolder && BN.Home.currentFolder()) note.folder = BN.Home.currentFolder();
     await BN.Store.saveNote(note, null);
     App.openNote(note.id);
   };
@@ -74,7 +75,7 @@
     note.items.push(
       mk(48, 'Welcome to BetterNotes ✍️', 30, '#4f7cff'),
       mk(112, 'Everything stays on this device — no accounts, nothing uploaded, works offline.', 18),
-      mk(176, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink, then move, resize, recolor or Tidy it\n• Add text boxes (write into them with the Pencil — Scribble types it for you)\n• Insert photos — move, resize and crop them\n• Precise eraser splits strokes — or switch it to whole-stroke\n• Pinch to zoom · two-finger tap undo · three-finger tap redo', 17),
+      mk(176, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink, then move, resize, recolor or Tidy it\n• Add text boxes (write into them with the Pencil — Scribble types it for you)\n• Insert photos — move, resize and crop them\n• Precise eraser splits strokes — or switch it to whole-stroke\n• Record a lecture — ink you write syncs to the audio; tap a word later to replay that moment\n• Pinch to zoom · two-finger tap undo · three-finger tap redo', 17),
       mk(430, 'Open ⚙ Settings to tune everything: palm rejection, pressure, smoothing, paper, themes and backups.', 17),
       mk(500, 'Tip: tap the active pen tool again to pick colors and sizes.', 17, '#4f7cff')
     );
