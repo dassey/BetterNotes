@@ -88,16 +88,29 @@
       path.arc(pts[0].x, pts[0].y, Math.max(r, 0.3), 0, Math.PI * 2);
       return path;
     }
-    const n = pts.length;
-    const arc = new Array(n);
+    let n = pts.length;
+    let arc = new Array(n);
     arc[0] = 0;
+    let maxSeg = 0;
     for (let i = 1; i < n; i++) {
-      arc[i] = arc[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      arc[i] = arc[i - 1] + seg;
+      if (seg > maxSeg) maxSeg = seg;
     }
-    const total = arc[n - 1];
+    let total = arc[n - 1];
     let taperLen = 0;
     if (opts && opts.taper && total > size * 1.5) {
       taperLen = U.clamp(total * 0.22, size * 0.8, size * 3.2);
+      // Taper is evaluated per vertex, so sparse strokes (a fast straight line is just
+      // two vertices) need interior points or the whole segment inherits the tip width.
+      if (maxSeg > taperLen / 2) {
+        pts = U.resample(pts, Math.max(1.5, taperLen / 3));
+        n = pts.length;
+        arc = new Array(n);
+        arc[0] = 0;
+        for (let i = 1; i < n; i++) arc[i] = arc[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+        total = arc[n - 1];
+      }
     }
     const radii = new Array(n);
     for (let i = 0; i < n; i++) {

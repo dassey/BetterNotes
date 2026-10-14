@@ -622,9 +622,10 @@ input.swatch.custom::-webkit-color-swatch { border: none; opacity: 0; }
   #ed-d1 { order: 4; }
   #ed-tools { order: 5; }
   #ed-d2 { order: 6; }
-  #ed-paper { order: 7; }
-  #ed-export { order: 8; }
-  #ed-settings { order: 9; }
+  #ed-record { order: 7; }
+  #ed-paper { order: 8; }
+  #ed-export { order: 9; }
+  #ed-settings { order: 10; }
 }
 
 @media (max-width: 520px) {
@@ -634,6 +635,7 @@ input.swatch.custom::-webkit-color-swatch { border: none; opacity: 0; }
   #ed-tools .icon-btn { width: 35px; height: 35px; }
   .icon-btn { width: 36px; height: 38px; }
   .bar-divider { display: none; }
+  #ed-tools [data-tool="laser"] { display: none; }
 }
 
 /* ============ polish: cursors, zoom chip, presses ============ */
@@ -665,3 +667,106 @@ input.swatch.custom::-webkit-color-swatch { border: none; opacity: 0; }
 .pen-chip:active { transform: scale(0.9); }
 .swatch:active { transform: scale(0.9); }
 #home-fab { transition: transform 0.1s ease, box-shadow 0.1s ease; }
+
+/* ============ audio recording ============ */
+@keyframes rec-pulse { 50% { opacity: 0.3; } }
+#ed-record.recording { color: var(--danger); }
+#ed-record.recording svg { animation: rec-pulse 1.1s ease-in-out infinite; }
+#recPill {
+  position: absolute;
+  top: 8px;
+  left: calc(env(safe-area-inset-left) + 12px);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 9px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(10, 10, 30, 0.08);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--danger);
+  font-variant-numeric: tabular-nums;
+}
+#recPill[hidden] { display: none; }
+#recPill i { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); animation: rec-pulse 1.1s ease-in-out infinite; }
+
+#audioBar {
+  position: absolute;
+  left: 50%;
+  translate: -50% 0;
+  bottom: calc(env(safe-area-inset-bottom) + 12px);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  width: min(560px, calc(100% - 120px));
+}
+#audioBar[hidden] { display: none; }
+#audioBar input[type="range"] { flex: 1; min-width: 50px; }
+#audioBar button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  font-size: 13px;
+  color: var(--text);
+}
+#audioBar button:active { background: var(--bg-inset); }
+#audioBar button:disabled { opacity: 0.3; }
+#audioBar .ab-play { background: var(--accent); color: #fff; font-size: 12px; }
+#audioBar .ab-time, #audioBar .ab-label { font-size: 12px; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { #audioBar .ab-label { display: none; } }
+.bn-text.replay-future { opacity: 0.18; }
+
+/* ============ read as text, laser ============ */
+.read-body { padding-top: 6px; }
+.read-hint { font-size: 14.5px; line-height: 1.55; margin-bottom: 12px; }
+.read-img-wrap { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 8px; margin-bottom: 14px; overflow: auto; max-height: 50vh; }
+.read-img-wrap img { display: block; max-width: 100%; height: auto; -webkit-user-select: auto; user-select: auto; -webkit-touch-callout: default; }
+#canvasWrap[data-tool="laser"] { cursor: crosshair; }
+
+/* ============ folders ============ */
+#home-folders {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 calc(env(safe-area-inset-right) + 16px) 10px calc(env(safe-area-inset-left) + 16px);
+}
+#home-folders::-webkit-scrollbar { display: none; }
+.folder-chip {
+  flex: none;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+  transition: transform 0.08s ease, background 0.12s ease;
+}
+.folder-chip.active { background: var(--accent); color: #fff; }
+.folder-chip.add { background: transparent; border: 1.5px dashed var(--border); }
+.folder-chip:active { transform: scale(0.95); }
+
+/* ============ print / save as PDF ============ */
+#printRoot { display: none; }
+@media print {
+  body { position: static !important; overflow: visible !important; opacity: 1 !important; background: #fff !important; }
+  body > *:not(#printRoot) { display: none !important; }
+  #printRoot { display: block !important; }
+  #printRoot img { display: block; width: 100%; page-break-after: always; break-after: page; }
+  #printRoot img:last-child { page-break-after: auto; break-after: auto; }
+  @page { margin: 0; }
+}

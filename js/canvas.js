@@ -111,20 +111,16 @@
     }
 
     const style = note.paper.style || 'blank';
-    if (style === 'blank') {
-      const c0 = paperColor;
-      const l0 = (0.299 * parseInt(c0.slice(1, 3), 16) + 0.587 * parseInt(c0.slice(3, 5), 16) + 0.114 * parseInt(c0.slice(5, 7), 16)) / 255;
-      this.blendHigh = l0 > 0.5 ? 'multiply' : 'source-over';
-      return;
-    }
-    const spacing = note.paper.spacing || 32;
+    const lum = hexLum(paperColor);
+    this.paperLum = lum;
+    this.blendHigh = lum > 0.5 ? 'multiply' : 'source-over';
+    if (style === 'blank') return;
+    const spacing = style === 'music' ? 9 : (note.paper.spacing || 32);
     // Skip rules that would be sub-pixel mush (dots earlier: unbounded grids get big).
     if (spacing * this.t.s < (style === 'dots' ? 6 : 3)) return;
     // Rule color adapts to paper lightness.
-    const rgb = [parseInt(paperColor.slice(1, 3), 16), parseInt(paperColor.slice(3, 5), 16), parseInt(paperColor.slice(5, 7), 16)];
-    const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
-    this.blendHigh = lum > 0.5 ? 'multiply' : 'source-over';
     const rule = lum > 0.5 ? 'rgba(64,105,180,0.20)' : 'rgba(255,255,255,0.16)';
+    const strong = lum > 0.5 ? 'rgba(64,105,180,0.45)' : 'rgba(255,255,255,0.4)';
     ctx.save();
     if (!infinite) {
       ctx.beginPath();
@@ -141,9 +137,27 @@
     let y0 = Math.floor(ya / spacing) * spacing;
     if (!infinite) { x0 = Math.max(x0, spacing); y0 = Math.max(y0, spacing); }
 
-    if (style === 'lines' || style === 'grid') {
+    if (style === 'lines' || style === 'grid' || style === 'cornell') {
       ctx.beginPath();
       for (let y = y0; y <= yb; y += spacing) { ctx.moveTo(xa, y); ctx.lineTo(xb, y); }
+      ctx.stroke();
+    }
+    if (style === 'cornell') {
+      // Cue column on the left; summary band at the foot of a fixed page.
+      const cueX = (infinite ? 800 : bounds.w) * 0.3;
+      ctx.strokeStyle = strong;
+      ctx.lineWidth = 2 / this.t.s;
+      ctx.beginPath();
+      ctx.moveTo(cueX, ya); ctx.lineTo(cueX, yb);
+      if (!infinite) { const sy = bounds.h * 0.8; ctx.moveTo(xa, sy); ctx.lineTo(xb, sy); }
+      ctx.stroke();
+    }
+    if (style === 'music') {
+      const period = 90; // 5 lines × 9 units, then a gap
+      ctx.beginPath();
+      for (let g = Math.floor(ya / period) * period; g <= yb; g += period) {
+        for (let k = 0; k < 5; k++) { const y = g + k * 9; ctx.moveTo(xa, y); ctx.lineTo(xb, y); }
+      }
       ctx.stroke();
     }
     if (style === 'grid') {
@@ -165,6 +179,21 @@
     ctx.restore();
   };
 
+  function hexLum(c) {
+    if (!/^#[0-9a-fA-F]{6}$/.test(c || '')) return 1;
+    return (0.299 * parseInt(c.slice(1, 3), 16) + 0.587 * parseInt(c.slice(3, 5), 16) + 0.114 * parseInt(c.slice(5, 7), 16)) / 255;
+  }
+
+  // Keeps ink readable when paper and ink are both dark (or both light).
+  Renderer.prototype.inkColor = function (c) {
+    if (BN.Settings && BN.Settings.get('appearance.autoInk') === false) return c;
+    if (this.paperLum == null) return c;
+    const l = hexLum(c);
+    if (this.paperLum < 0.4 && l < 0.35) return '#e8e8f0';
+    if (this.paperLum >= 0.4 && l > 0.9) return '#1d1d2e';
+    return c;
+  };
+
   Renderer.prototype.drawItem = function (ctx, item, opts) {
     opts = opts || {};
     if (item.type === 'stroke') {
@@ -179,7 +208,7 @@
         ctx.stroke(Ink.centerlinePath(item.points));
         ctx.restore();
       } else {
-        ctx.fillStyle = item.color;
+        ctx.fillStyle = this.inkColor(item.color);
         const taper = BN.Settings && BN.Settings.get('input.taper') !== false && !item.snap;
         ctx.fill(Ink.outlinePath(item.points, item.size, item.pressure ?? 0.65, { taper }));
       }
@@ -203,13 +232,13 @@
         ctx.restore();
       }
     } else if (item.type === 'text' && opts.drawText) {
-      drawTextItem(ctx, item);
+      drawTextItem(ctx, item, this.inkColor(item.color || '#1d1d2e'));
     }
   };
 
-  function drawTextItem(ctx, item) {
+  function drawTextItem(ctx, item, color) {
     ctx.save();
-    ctx.fillStyle = item.color || '#1d1d2e';
+    ctx.fillStyle = color || item.color || '#1d1d2e';
     ctx.font = `400 ${item.size}px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif`;
     ctx.textBaseline = 'alphabetic';
     const lineH = item.size * 1.35;
@@ -243,11 +272,15 @@
     applyWorldTransform(ctx, this.t, this.dpr);
     const view = this.viewWorldRect(40);
     this.drawPaper(ctx, note, view);
+    const rp = this.replay; // during recording playback, items from the future are dimmed
     for (const item of note.items) {
       if (opts.skip && opts.skip.has(item.id)) continue;
       if (item.type === 'text') continue; // text lives in the DOM layer
       if (!rectsIntersect(BN.itemBBox(item), view)) continue;
+      const dim = !!(rp && item.at && item.at.c === rp.c && item.at.t > rp.t);
+      if (dim) ctx.globalAlpha = 0.18;
       this.drawItem(ctx, item);
+      if (dim) ctx.globalAlpha = 1;
     }
     if (!opts.noCache) {
       if (this.cache.width !== this.ink.width || this.cache.height !== this.ink.height) {

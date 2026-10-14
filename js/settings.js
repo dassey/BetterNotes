@@ -92,7 +92,7 @@
     },
     {
       key: 'paper.style', label: 'Paper style', type: 'select', def: 'lines',
-      options: [['lines', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['blank', 'Blank']]
+      options: [['lines', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['cornell', 'Cornell notes'], ['music', 'Music staff'], ['blank', 'Blank']]
     },
     { key: 'paper.spacing', label: 'Line spacing', type: 'range', min: 20, max: 64, step: 2, def: 32 },
     { key: 'paper.color', label: 'Paper color', type: 'color', def: '#ffffff' },
@@ -102,12 +102,24 @@
       desc: 'Sheet width for new Fixed-page notes (Infinite canvas has no width).'
     },
 
+    { section: 'Audio recording' },
+    {
+      key: 'audio.bitrate', label: 'Recording quality', type: 'select', def: '64000',
+      options: [['48000', 'Compact (48 kbps)'], ['64000', 'Balanced (64 kbps)'], ['128000', 'High (128 kbps)']],
+      desc: 'Recordings are stored inside the note on this device. Balanced is about 0.5 MB per minute.'
+    },
+    { info: 'Ink written while recording is time-stamped: during playback it dims until its moment, and tapping it with the hand tool jumps the audio there.' },
+
     { section: 'Appearance' },
     {
       key: 'appearance.theme', label: 'Theme', type: 'select', def: 'system',
       options: [['system', 'Match device'], ['light', 'Light'], ['dark', 'Dark']]
     },
     { key: 'appearance.accent', label: 'Accent color', type: 'color', def: '#4f7cff' },
+    {
+      key: 'appearance.autoInk', label: 'Readable ink on dark paper', type: 'toggle', def: true,
+      desc: 'Near-black ink is drawn light on dark paper (and white ink dark on light paper). Your saved colors are untouched.'
+    },
 
     { section: 'Saving & privacy' },
     {
