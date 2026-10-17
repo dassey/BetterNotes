@@ -175,10 +175,11 @@
         <ul>
           <li><strong>Infinite canvas</strong> — new notes grow in every direction; just scroll and keep writing. Prefer a classic sheet? Switch any note between Infinite and Page in its paper menu (the 📄 button).</li>
           <li><strong>Pen / Highlighter</strong> — tap the active tool again for colors and sizes. Apple Pencil pressure shapes the ink.</li>
+          <li><strong>Lines</strong> — a long, nearly straight stroke straightens itself on lift and snaps to 15° steps (Settings → Auto-straighten). Draw a corner sharply and the stabilizer keeps it sharp.</li>
           <li><strong>Shaky hands?</strong> — raise the <em>Steady</em> slider (in the pen popover, or “Stabilize strokes” in Settings). It absorbs hand tremor as you write; at high values the ink deliberately trails the pen a touch.</li>
           <li><strong>Shapes</strong> — draw a line, box, circle or triangle and keep the pen pressed down and still at the end; after a moment the shape snaps perfect (a colored glow confirms it), then lift. Lifting too early skips the snap. Hold time is adjustable in Settings.</li>
           <li><strong>Saved pens</strong> — the floating bar under the toolbar holds your favorite pens. Tap a chip to switch, <strong>+</strong> to save the current color/size, and tap the active chip again to update or remove it. Hide the bar in Settings if you want the space.</li>
-          <li><strong>Palm rejection</strong> — turn on “Draw with Pencil only” in Settings. Then one finger scrolls and a pinch zooms while only the Pencil draws. Even with it off, fingers won’t draw while the Pencil is in use.</li>
+          <li><strong>Palm rejection</strong> — automatic: the first time this device sees an Apple Pencil, fingers switch to scrolling and zooming while only the Pencil draws. Change it under Settings → Fingers. Even when fingers may draw, a touch right after Pencil activity just scrolls.</li>
           <li><strong>Eraser</strong> — Precise mode erases just what’s under it (splitting strokes); tap the eraser tool again to switch modes or resize.</li>
           <li><strong>Two-finger tap</strong> — undo. <strong>Three-finger tap</strong> — redo.</li>
         </ul>
@@ -203,7 +204,7 @@
         <p>Tap the photo button to insert images; drag to move. <strong>Corner handles</strong> resize keeping proportions; <strong>side handles</strong> stretch one direction freely. Select a photo and tap <strong>Crop</strong> to trim it — the crop is non-destructive, so cropping again can bring the edges back. (A selected text box gets side handles too, for its wrap width.) Images are stored inside the note on your device.</p>
 
         <h3>Folders &amp; printing</h3>
-        <p>Use the folder chips on the home screen to sort notes by subject (tap an active chip to rename or delete it); a note's ⋯ menu moves it. <strong>Share → Print / Save as PDF</strong> turns any note into clean A4 pages through the system print sheet — pick <em>Save as PDF</em> there — with no extra software involved.</p>
+        <p>Use the folder chips on the home screen to sort notes by subject (tap an active chip to rename or delete it); a note's ⋯ menu moves it. <strong>Share → Export PDF</strong> writes a real vector PDF (crisp at any zoom, tiny file: ink as true paths, photos embedded, text selectable) with no extra software; <em>Print</em> remains as a fallback through the system print sheet.</p>
 
         <h3>Privacy</h3>
         <p class="muted">No accounts. No tracking. No uploads. Notes live in your browser’s on-device storage — use Settings → “Back up all notes” to save them to a file, and “Protect storage” to ask the device to keep them safe. If you ever clear Safari website data, backed-up files are your safety net.</p>
@@ -239,6 +240,7 @@
   <script src="./js/store.js"></script>
   <script src="./js/settings.js"></script>
   <script src="./js/canvas.js"></script>
+  <script src="./js/pdf.js"></script>
   <script src="./js/editor.js"></script>
   <script src="./js/home.js"></script>
   <script src="./js/app.js"></script>

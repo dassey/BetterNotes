@@ -2,7 +2,7 @@
    offline; cache-first for app files, no runtime requests to anywhere else. */
 'use strict';
 
-const VERSION = 'bn-v0.8.0';
+const VERSION = 'bn-v0.9.0';
 const ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const ASSETS = [
   './js/store.js',
   './js/settings.js',
   './js/canvas.js',
+  './js/pdf.js',
   './js/editor.js',
   './js/home.js',
   './js/app.js',

@@ -20,6 +20,8 @@
   let lastThumbAt = 0;
   let touchTap = null;          // multi-finger tap candidate (2 = undo, 3 = redo)
   let lastPenAt = 0;            // pen-priority palm rejection window
+  let penSeen = false;          // a Pencil has ever touched this device
+  try { penSeen = localStorage.getItem('bn.penSeen') === '1'; } catch (err) { }
   let cropState = null;         // active image-crop session
   let laserTrail = [];          // fading laser-pointer points (never saved)
   let rec = null;               // active audio recording session
@@ -1062,8 +1064,7 @@
     pointers.set(e.pointerId, { type: e.pointerType, sx: s.x, sy: s.y, x: s.x, y: s.y, t: performance.now() });
 
     const isTouch = e.pointerType === 'touch';
-    const pencilOnly = S.get('input.pencilOnly');
-    if (e.pointerType === 'pen') lastPenAt = performance.now();
+    if (e.pointerType === 'pen') notePenSeen();
 
     if (isTouch) {
       const touches = touchPointers();
@@ -1073,8 +1074,7 @@
       }
       if (touches.length === 3 && touchTap) { touchTap.count = 3; return; }
       if (touches.length > 2) return;
-      const penRecently = performance.now() - lastPenAt < 700;
-      if (pencilOnly || tool === 'hand' || penRecently) { startPan(); return; }
+      if (tool === 'hand' || fingersPan()) { startPan(); return; }
       // else: finger draws with the current tool
     }
     if (e.pointerType === 'pen' && action && (action.kind === 'pan' || action.kind === 'pinch')) {
@@ -1083,6 +1083,25 @@
     if (action) return;
     if (cropState) { startCropDrag(e, s); return; }
     startToolAction(e, s);
+  }
+
+  function notePenSeen() {
+    lastPenAt = performance.now();
+    if (penSeen) return;
+    penSeen = true;
+    try { localStorage.setItem('bn.penSeen', '1'); } catch (err) { }
+    if ((S.get('input.fingerMode') || 'auto') === 'auto') {
+      app.toast('Pencil detected — fingers now scroll and zoom. Change this under Settings → Fingers.');
+    }
+  }
+
+  // Should a finger touch scroll instead of draw? Pencil-only mode, auto mode
+  // once a Pencil has been seen, or any finger landing just after the pen.
+  function fingersPan() {
+    const mode = S.get('input.fingerMode') || 'auto';
+    if (mode === 'pan') return true;
+    if (mode === 'auto' && penSeen) return true;
+    return performance.now() - lastPenAt < (S.get('input.penTouchTimeout') || 1000);
   }
 
   function maybeStartPinch(e) {
@@ -1154,9 +1173,9 @@
     if (isHigh) item.opacity = S.get('ink.highOpacity');
     const sm = S.get('input.smoothing');
     const ropePx = Math.max(0, sm - 0.35) * 15; // dead-zone radius in screen px, ~10px at max
-    const smoother = Ink.createSmoother(sm, ropePx / renderer.t.s);
+    const smoother = Ink.createSmoother(sm, ropePx / renderer.t.s, renderer.t.s);
     const realP = e.pointerType === 'pen' && e.pressure > 0;
-    const first = smoother.push({ x: w.x, y: w.y, p: realP ? e.pressure : 0.62 });
+    const first = smoother.push({ x: w.x, y: w.y, p: realP ? e.pressure : 0.62, t: e.timeStamp })[0];
     item.points.push(first);
     action = {
       kind: 'draw', item, smoother, pid: e.pointerId, byTouch: e.pointerType === 'touch',
@@ -1262,7 +1281,8 @@
     switch (action.kind) {
       case 'draw': {
         if (e.pointerId !== action.pid) return;
-        const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+        const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+        const evs = coalesced && coalesced.length ? coalesced : [e];
         const t = renderer.t;
         for (const ev of evs) {
           const l = localXY(ev);
@@ -1277,12 +1297,12 @@
           } else {
             p = 0.5;
           }
-          const pt = action.smoother.push({ x: w.x, y: w.y, p });
           action.lastRaw = w;
           const rl = action.raw[action.raw.length - 1];
           if (U.dist(w.x, w.y, rl.x, rl.y) * t.s >= 1.5) action.raw.push({ x: w.x, y: w.y });
-          const lp = action.lastPt;
-          if (U.dist(pt.x, pt.y, lp.x, lp.y) * t.s >= 1.1) {
+          for (const pt of action.smoother.push({ x: w.x, y: w.y, p, t: ev.timeStamp })) {
+            const lp = action.lastPt;
+            if (U.dist(pt.x, pt.y, lp.x, lp.y) * t.s < 1.1) continue;
             action.item.points.push(pt);
             action.lastPt = pt;
             if (U.dist(pt.x, pt.y, lp.x, lp.y) * t.s > 2.5) {
@@ -1717,14 +1737,25 @@
       item.points = a.snapped;
       item.snap = true;
     } else {
-      // Catch the stabilizer's trailing tip halfway up to where the pen lifted.
-      if (a.lastRaw && item.points.length > 1) {
+      // The dead zone holds the painted tip back from the pen; finish the stroke
+      // where the pen actually lifted.
+      const live = a.smoother.live();
+      if (live && item.points.length > 0) {
         const lp = item.points[item.points.length - 1];
-        if (U.dist(lp.x, lp.y, a.lastRaw.x, a.lastRaw.y) > 0.5) {
-          item.points.push({ x: (lp.x + a.lastRaw.x) / 2, y: (lp.y + a.lastRaw.y) / 2, p: lp.p });
+        const d = U.dist(lp.x, lp.y, live.x, live.y);
+        if (d > 0.5) {
+          const n = Math.min(6, Math.max(1, Math.round((d * renderer.t.s) / 3)));
+          for (let i = 1; i <= n; i++) {
+            const f = i / n;
+            item.points.push({ x: lp.x + (live.x - lp.x) * f, y: lp.y + (live.y - lp.y) * f, p: lp.p + (live.p - lp.p) * f });
+          }
         }
       }
-      item.points = Ink.finalizePoints(item.points, S.get('input.smoothing'));
+      if (S.get('input.autoStraighten') !== false) {
+        const straight = Ink.autoStraighten(item.points, item.size);
+        if (straight) { item.points = straight; item.snap = true; }
+      }
+      if (!item.snap) item.points = Ink.finalizePoints(item.points, S.get('input.smoothing'));
     }
     delete item._bb;
     if (item.points.length === 0) { renderer.renderLive(drawOverlays); return; }
@@ -1732,6 +1763,17 @@
     note.items.push(item);
     pushOp(opAdd([item]));
     renderAll();
+  }
+
+  async function exportPDF() {
+    if (!note) return;
+    app.toast('Building PDF…');
+    try {
+      const res = await BN.PDF.exportNote(note, renderer);
+      await app.downloadBlob(res.blob, sanitizeName(note.title) + '.pdf');
+    } catch (err) {
+      app.toast('PDF export failed', true);
+    }
   }
 
   function finishLasso(a) {
@@ -1833,15 +1875,21 @@
         } else {
           ctx.fillStyle = renderer.inkColor(item.color);
           ctx.fill(Ink.outlinePath(pts, item.size, item.pressure, { taper: S.get('input.taper') !== false && !action.snapped }));
-          if (!action.snapped && action.predicted.length) {
+          if (!action.snapped) {
             const lp = item.points[item.points.length - 1];
-            ctx.strokeStyle = renderer.inkColor(item.color);
-            ctx.lineWidth = Ink.widthAt(lp.p, item.size, item.pressure);
-            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-            ctx.beginPath();
-            ctx.moveTo(lp.x, lp.y);
-            for (const q of action.predicted) ctx.lineTo(q.x, q.y);
-            ctx.stroke();
+            const live = action.smoother.live();
+            const tail = [];
+            if (live && U.dist(lp.x, lp.y, live.x, live.y) * t.s > 0.5) tail.push(live);
+            for (const q of action.predicted) tail.push(q);
+            if (tail.length) {
+              ctx.strokeStyle = renderer.inkColor(item.color);
+              ctx.lineWidth = Ink.widthAt(lp.p, item.size, item.pressure);
+              ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+              ctx.beginPath();
+              ctx.moveTo(lp.x, lp.y);
+              for (const q of tail) ctx.lineTo(q.x, q.y);
+              ctx.stroke();
+            }
           }
         }
       } else if (action.kind === 'erase') {
@@ -2263,7 +2311,8 @@
       };
       add('Share image — visible area', () => exportImage(false));
       add('Share image — whole note', () => exportImage(true));
-      add('Print / Save as PDF…', () => printNote());
+      add('Export PDF…', () => exportPDF());
+      add('Print…', () => printNote());
       add('Back up this note (file)', async () => {
         await Editor.flush();
         const data = await BN.Store.exportBackup([note.id]);
@@ -2297,6 +2346,7 @@
     return pages;
   }
   Editor.buildPrintPages = buildPrintPages;
+  Editor.exportPDFBlob = (n) => BN.PDF.exportNote(n || note, renderer);
 
   async function printNote() {
     try {
