@@ -2,7 +2,7 @@
    offline; cache-first for app files, no runtime requests to anywhere else. */
 'use strict';
 
-const VERSION = 'bn-v0.10.0';
+const VERSION = 'bn-v0.11.0';
 const VENDOR = 'bn-vendor-v1'; // speech runtime from the CDN: versioned, immutable, kept across app updates
 const ASSETS = [
   './',
@@ -15,7 +15,6 @@ const ASSETS = [
   './js/canvas.js',
   './js/pdf.js',
   './js/transcribe.js',
-  './js/transcribe-worker.js',
   './js/capture-worklet.js',
   './js/editor.js',
   './js/home.js',
@@ -26,6 +25,16 @@ const ASSETS = [
   './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png'
 ];
+
+// Multithreaded WebAssembly (speech recognition) needs a cross-origin-isolated page.
+// GitHub Pages cannot send these headers, so every response we serve carries them.
+const ISOLATION = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
+function isolate(res) {
+  if (!res || res.type === 'opaque' || res.status === 0) return res;
+  const headers = new Headers(res.headers);
+  for (const k in ISOLATION) headers.set(k, ISOLATION[k]);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -59,7 +68,7 @@ self.addEventListener('fetch', (e) => {
 
   if (req.mode === 'navigate') {
     e.respondWith(
-      caches.match('./index.html').then((r) => r || fetch(req))
+      caches.match('./index.html').then((r) => r || fetch(req)).then(isolate)
     );
     return;
   }
@@ -71,6 +80,6 @@ self.addEventListener('fetch', (e) => {
         caches.open(VERSION).then((c) => c.put(req, copy));
       }
       return res;
-    }))
+    })).then(isolate)
   );
 });

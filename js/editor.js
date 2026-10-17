@@ -103,6 +103,12 @@
     setTool(tool || 'pen');
     renderPenBar();
     if (note.audio && note.audio.length) showAudioBar(note.audio.length - 1); else hideAudioBar();
+    try {
+      if (sessionStorage.getItem('bn.speechReload') === '1') {
+        sessionStorage.setItem('bn.speechReload', 'done');
+        if (BN.Transcribe && BN.Transcribe.isolated()) app.toast('Speech recognition is ready — tap the microphone to start');
+      }
+    } catch (e) { /* ignore */ }
     updateUndoButtons();
   };
 
@@ -755,7 +761,7 @@
     }
     if (BN.Transcribe) BN.Transcribe.touchAudio(); // audio may only start inside the tap itself
     const transcribe = await decideTranscription(false);
-    if (rec || !note) return;
+    if (transcribe === 'reload' || rec || !note) return;
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch (e) { app.toast('Microphone access was denied', true); return; }
@@ -924,20 +930,44 @@
   const transcribing = new Map(); // clip id → {pct}
 
   // 'ask' shows the one-time offer; the answer is remembered as a setting the user can change.
+  // 'ask' shows the one-time offer; the answer is remembered as a setting the user can change.
+  // Returns 'on', 'off', or 'reload' (the page is about to reload to enable isolation).
   async function decideTranscription(force) {
     if (!BN.Transcribe || !BN.Transcribe.SUPPORTED) return 'off';
     let v = S.get('audio.transcribe') || 'ask';
-    if (v === 'on') return 'on';
     if (v === 'off' && !force) return 'off';
-    const mb = BN.Transcribe.estimateMB();
-    const pick = await app.choose('Transcribe your lectures?',
-      `BetterNotes can turn speech into text as you record, right on this device. It needs a one-time download of a small open speech model (about ${mb} MB). Your audio never leaves this device. You can change this later under Settings → Audio recording.`,
-      [{ label: 'Just record' }, { label: 'Download & transcribe', primary: true }]);
-    if (pick < 0) return 'off'; // dismissed: ask again next time
-    v = pick === 1 ? 'on' : 'off';
-    S.set('audio.transcribe', v);
-    if (v === 'off') app.toast('Recording only. Transcription can be turned on in Settings → Audio recording.');
-    return v;
+    if (v !== 'on') {
+      const mb = BN.Transcribe.estimateMB();
+      const pick = await app.choose('Transcribe your lectures?',
+        `BetterNotes can turn speech into text as you record, right on this device. It needs a one-time download of an open speech model (about ${mb} MB; pick a smaller or larger one in Settings). Your audio never leaves this device. You can change this later under Settings → Audio recording.`,
+        [{ label: 'Just record' }, { label: 'Download & transcribe', primary: true }]);
+      if (pick < 0) return 'off'; // dismissed: ask again next time
+      v = pick === 1 ? 'on' : 'off';
+      S.set('audio.transcribe', v);
+      if (v === 'off') { app.toast('Recording only. Transcription can be turned on in Settings → Audio recording.'); return 'off'; }
+    }
+    if (BN.Transcribe.needsReload()) {
+      let tried = false;
+      try { tried = sessionStorage.getItem('bn.speechReload') === 'done'; } catch (e) { /* ignore */ }
+      if (tried) { app.toast('Speech recognition is not available in this browser', true); return 'off'; }
+      await prepareIsolation();
+      return 'reload';
+    }
+    return 'on';
+  }
+
+  // Fast speech recognition needs a cross-origin-isolated page. The service worker adds the
+  // headers, but only a fresh load can pick them up — so reload once, then carry on.
+  async function prepareIsolation() {
+    app.toast('Setting up speech recognition — reloading once…');
+    try { sessionStorage.setItem('bn.speechReload', '1'); } catch (e) { /* ignore */ }
+    try {
+      if (navigator.serviceWorker && !navigator.serviceWorker.controller) {
+        await Promise.race([navigator.serviceWorker.ready, new Promise((r) => setTimeout(r, 5000))]);
+      }
+    } catch (e) { /* ignore */ }
+    try { await Editor.flush(); } catch (e) { /* ignore */ }
+    setTimeout(() => location.reload(), 800);
   }
 
   function startLiveTranscription(stream) {
@@ -949,6 +979,7 @@
     const list = r.transcript;
     r.live = BN.Transcribe.createLiveSession(stream, {
       startedAt: r.startedAt,
+      onPartial: (text) => { if (rec === r && text) showCaption({ state: 'partial', text }); },
       onSegment: (seg) => { list.push(seg); if (rec === r) showCaption({ state: 'text', text: seg.text }); }
     });
     r.live.ready.catch((e) => { if (rec === r) showCaption({ state: 'error', message: 'Transcription unavailable: ' + ((e && e.message) || e) }); });
@@ -975,10 +1006,11 @@
     let text = '';
     if (st.state === 'loading') text = st.pct ? `Downloading speech model · ${st.pct}%` : (st.note || 'Preparing speech model…');
     else if (st.state === 'ready') text = 'Listening…';
-    else if (st.state === 'text') text = st.text;
+    else if (st.state === 'text' || st.state === 'partial') text = st.text;
     else if (st.state === 'error') text = st.message || 'Transcription failed';
     c.textContent = text;
-    c.classList.toggle('dim', st.state !== 'text');
+    c.classList.toggle('dim', st.state !== 'text' && st.state !== 'partial');
+    c.classList.toggle('partial', st.state === 'partial');
     c.hidden = false;
     clearTimeout(captionTimer);
     if (st.state === 'error') captionTimer = setTimeout(() => { c.hidden = true; }, 6000);
@@ -2582,7 +2614,7 @@
   Editor.thumbnailFor = (n) => (renderer ? renderer.thumbnail(n) : Promise.resolve(null));
 
   // Introspection for tests/console; not used by the app itself.
-  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t, recording: !!rec, playback: playback ? { index: playback.index, paused: playback.audio.paused, time: playback.audio.currentTime } : null, replay: renderer && renderer.replay, liveSegments: rec && rec.transcript ? rec.transcript.length : 0, caption: el.liveCaption && !el.liveCaption.hidden ? el.liveCaption.textContent : null, transcribing: transcribing.size });
+  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t, recording: !!rec, playback: playback ? { index: playback.index, paused: playback.audio.paused, time: playback.audio.currentTime } : null, replay: renderer && renderer.replay, liveSegments: rec && rec.transcript ? rec.transcript.length : 0, isolated: !!window.crossOriginIsolated, caption: el.liveCaption && !el.liveCaption.hidden ? el.liveCaption.textContent : null, transcribing: transcribing.size });
 
   window.BN = window.BN || {};
   window.BN.Editor = Editor;

@@ -832,3 +832,4 @@ input.swatch.custom::-webkit-color-swatch { border: none; opacity: 0; }
   #transcriptPanel { width: calc(100% - 24px); }
   #liveCaption { font-size: 14px; }
 }
+#liveCaption.partial { color: rgba(255, 255, 255, 0.86); font-style: italic; }

@@ -123,23 +123,18 @@
       desc: 'Turns what is said into searchable, tappable text while you record — entirely on this device. The first use downloads a small open speech model; your audio is never uploaded.'
     },
     {
-      key: 'audio.model', label: 'Speech model', type: 'select', def: 'moonshine-tiny',
-      options: [['moonshine-tiny', 'English · fastest (≈ 35 MB)'], ['moonshine-base', 'English · more accurate (≈ 70 MB)'], ['whisper-base', 'All languages (≈ 85 MB)']],
-      desc: 'Plus a one-time 20 MB runtime shared by all models. Devices with GPU acceleration fetch a larger, faster variant. Changing this downloads the new model on next use.'
+      key: 'audio.model', label: 'Speech model', type: 'select', def: 'small',
+      options: [['small', 'Balanced · 165 MB (recommended)'], ['tiny', 'Smallest · 50 MB'], ['medium', 'Most accurate · 300 MB']],
+      desc: 'Moonshine v2 streaming models, downloaded once and kept for offline use (plus a 14 MB runtime). Spanish, German and Japanese go up to Balanced; the other languages come in Smallest only. Changing this downloads the new model on next use.'
     },
     {
-      key: 'audio.language', label: 'Spoken language', type: 'select', def: 'auto',
-      options: [['auto', 'Detect automatically'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'], ['nl', 'Dutch'], ['pl', 'Polish'], ['tr', 'Turkish'], ['ru', 'Russian'], ['ar', 'Arabic'], ['hi', 'Hindi'], ['zh', 'Chinese'], ['ja', 'Japanese'], ['ko', 'Korean']],
-      desc: 'Used by the “All languages” model only; the English models ignore it.'
+      key: 'audio.language', label: 'Spoken language', type: 'select', def: 'en',
+      options: [['en', 'English'], ['es', 'Spanish'], ['de', 'German'], ['ja', 'Japanese'], ['zh', 'Chinese (Mandarin)'], ['ar', 'Arabic'], ['vi', 'Vietnamese'], ['tl', 'Tagalog']],
+      desc: 'Each language has its own model.'
     },
     {
       key: 'audio.liveCaptions', label: 'Live captions while recording', type: 'toggle', def: true,
       desc: 'Shows what was just said in a strip at the bottom of the page. Transcription still runs when this is off.'
-    },
-    {
-      key: 'audio.compute', label: 'Speech processing', type: 'select', def: 'auto',
-      options: [['auto', 'Automatic (GPU when available)'], ['cpu', 'CPU only']],
-      desc: 'Switch to CPU only if transcription misbehaves on this device.'
     },
     { action: 'removeModels', label: 'Delete downloaded speech model…', desc: 'Frees the storage used by the speech model and its runtime. They download again the next time transcription is used.' },
     { info: 'Ink written while recording is time-stamped: during playback it dims until its moment, and tapping it with the hand tool jumps the audio there.' },
@@ -187,6 +182,9 @@
       if (!item.key) continue;
       Settings.values[item.key] = (item.key in stored) ? stored[item.key] : item.def;
     }
+    const oldModel = { 'moonshine-tiny': 'tiny', 'moonshine-base': 'small', 'whisper-base': 'small' };
+    if (oldModel[stored['audio.model']]) Settings.values['audio.model'] = oldModel[stored['audio.model']];
+    if (stored['audio.language'] && !['en', 'es', 'de', 'ja', 'zh', 'ar', 'vi', 'tl'].includes(stored['audio.language'])) Settings.values['audio.language'] = 'en';
     if (stored['input.pencilOnly'] === true && !('input.fingerMode' in stored)) {
       Settings.values['input.fingerMode'] = 'pan';
     }

@@ -1,286 +1,158 @@
-/* BetterNotes — on-device speech-to-text. A small open speech model runs inside a Web
-   Worker (GPU when the browser offers it, WebAssembly otherwise). Audio never leaves the
-   device; the model is fetched once from a public model library and cached for offline use.
-   This file owns the microphone tap, the pause-based chunker that gives every passage its
-   timestamp, and the after-the-fact transcription of saved recordings. */
+/* BetterNotes — on-device speech-to-text. Moonshine Voice (MIT) runs in multithreaded
+   WebAssembly inside a worker: streaming models that return finished sentences with
+   timestamps while the lecturer is still talking. Audio never leaves the device; the
+   runtime and the chosen model are fetched once from public CDNs and cached offline.
+   Threads need a cross-origin-isolated page, so the service worker adds the two headers
+   GitHub Pages cannot send, and the first use reloads the page once to pick them up. */
 (function () {
   'use strict';
   const T = {};
   const AC = window.AudioContext || window.webkitAudioContext;
   const SR = 16000;
-  const FRAME = 320; // 20 ms at 16 kHz
-  const RUNTIME_MB = 20;
+  const RUNTIME_MB = 14;
 
   T.SUPPORTED = typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined' && !!AC &&
-    typeof OfflineAudioContext !== 'undefined' && !!(AC.prototype && 'audioWorklet' in AC.prototype);
+    typeof OfflineAudioContext !== 'undefined' && !!(AC.prototype && 'audioWorklet' in AC.prototype) &&
+    (!!window.crossOriginIsolated || 'serviceWorker' in navigator);
+  T.isolated = () => !!window.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined';
+  // The page must reload once after the service worker starts adding the isolation headers.
+  T.needsReload = () => T.SUPPORTED && !T.isolated();
 
+  // Moonshine v2 streaming models. Download sizes measured from the Moonshine CDN (2026-10).
   T.MODELS = {
-    'moonshine-tiny': { id: 'onnx-community/moonshine-tiny-ONNX', mb: 32, gpuMb: 80, multilingual: false },
-    'moonshine-base': { id: 'onnx-community/moonshine-base-ONNX', mb: 67, gpuMb: 158, multilingual: false },
-    'whisper-base': { id: 'onnx-community/whisper-base', mb: 81, gpuMb: 210, multilingual: true }
+    tiny: { arch: 'TinyStreaming', mb: 51 },
+    small: { arch: 'SmallStreaming', mb: 166 },
+    medium: { arch: 'MediumStreaming', mb: 305 }
   };
-
-  const cfg = {
-    libUrl: 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js',
-    hubHost: null,
-    hubPathTemplate: null,
-    wasmPaths: null
+  // Sizes published per language (English has all three).
+  T.LANGUAGES = {
+    en: ['tiny', 'small', 'medium'], es: ['tiny', 'small'], de: ['tiny', 'small'], ja: ['tiny', 'small'],
+    zh: ['tiny'], ar: ['tiny'], vi: ['tiny'], tl: ['tiny']
   };
+  const cfg = { libUrl: 'https://cdn.jsdelivr.net/npm/@moonshine-ai/moonshine-wasm@0.1.5/dist/index.js' };
   T.configure = (o) => Object.assign(cfg, o || {});
 
-  const settings = () => ({
-    model: BN.Settings.get('audio.model') || 'moonshine-tiny',
-    language: BN.Settings.get('audio.language') || 'auto',
-    compute: BN.Settings.get('audio.compute') || 'auto'
-  });
-  T.modelInfo = () => T.MODELS[settings().model] || T.MODELS['moonshine-tiny'];
-  let gpuOK = false;
-  T.usesGPU = () => settings().compute !== 'cpu' && gpuOK;
-  T.estimateMB = () => RUNTIME_MB + (T.usesGPU() ? T.modelInfo().gpuMb : T.modelInfo().mb);
+  function settings() {
+    let lang = BN.Settings.get('audio.language') || 'en';
+    if (!T.LANGUAGES[lang]) lang = 'en';
+    const sizes = T.LANGUAGES[lang];
+    let model = BN.Settings.get('audio.model') || 'small';
+    if (!sizes.includes(model)) model = sizes[sizes.length - 1];
+    return { lang, model };
+  }
+  T.choice = settings;
+  T.estimateMB = () => RUNTIME_MB + T.MODELS[settings().model].mb;
 
-  /* ---------------- engine: one worker, one loaded model ---------------- */
+  /* ---------------- engine: the library, one worker, one loaded model ---------------- */
 
   let engine = null;
-  const statusListeners = new Set();
   let lastStatus = { state: 'idle' };
+  let lastFailure = 0;
+  const statusListeners = new Set();
 
   T.status = () => lastStatus;
-  T.isReady = () => !!(engine && engine.device);
+  T.isReady = () => !!(engine && engine.loaded);
   T.onStatus = (fn) => { statusListeners.add(fn); return () => statusListeners.delete(fn); };
   function setStatus(st) {
     lastStatus = st;
     for (const fn of statusListeners) { try { fn(st); } catch (e) { /* listener error */ } }
   }
-
-  // GPU is used only when the browser can actually hand us an adapter; a GPU load that
-  // fails is remembered for this app version so the device does not retry it every launch.
-  const GPU_FLAG = 'bn.speechGpuBroken';
-  const gpuBroken = () => { try { return localStorage.getItem(GPU_FLAG) === BN.VERSION; } catch (e) { return false; } };
-  const markGpuBroken = () => { try { localStorage.setItem(GPU_FLAG, BN.VERSION); } catch (e) { /* ignore */ } };
-  async function probeGPU() {
-    if (!navigator.gpu) return false;
-    try { return !!(await navigator.gpu.requestAdapter()); } catch (e) { return false; }
+  function friendly(err) {
+    const m = String((err && err.message) || err || '');
+    if (/fetch|network|download|load failed|Failed to/i.test(m)) return 'Could not download the speech model — check the connection';
+    return m || 'Speech recognition failed';
   }
-  let lastFailure = 0;
-  probeGPU().then((ok) => { gpuOK = ok && !gpuBroken(); });
 
   T.ensureEngine = function () {
     if (engine) return engine.ready;
-    if (Date.now() - lastFailure < 30000) return Promise.reject(new Error(lastStatus.message || 'speech engine unavailable'));
+    if (!T.isolated()) return Promise.reject(new Error('Speech recognition needs a one-time reload'));
+    if (Date.now() - lastFailure < 30000) return Promise.reject(new Error(lastStatus.message || 'Speech recognition is unavailable'));
     const s = settings();
-    const info = T.MODELS[s.model] || T.MODELS['moonshine-tiny'];
-    const e = engine = { worker: null, device: null, pending: new Map(), nextId: 1 };
+    const e = engine = { host: null, lib: null, loaded: false };
+    setStatus({ state: 'loading', pct: 0 });
     e.ready = (async () => {
-      const wantGPU = s.compute !== 'cpu' && !gpuBroken() && (await probeGPU());
-      const devices = wantGPU ? ['webgpu', 'wasm'] : ['wasm'];
-      let lastErr = null;
-      for (const device of devices) {
-        if (engine !== e) throw new Error('speech engine stopped');
-        try {
-          await startWorker(e, device, info, s);
-          return { device };
-        } catch (err) {
-          lastErr = err;
-          if (device === 'webgpu') markGpuBroken();
-        }
-      }
-      if (engine === e) engine = null;
-      lastFailure = Date.now();
-      setStatus({ state: 'error', message: (lastErr && lastErr.message) || 'speech model failed to load' });
-      throw lastErr || new Error('speech model failed to load');
+      const lib = await import(cfg.libUrl);
+      if (engine !== e) throw new Error('speech engine stopped');
+      e.lib = lib;
+      const host = new lib.SttWorkerHost();
+      e.host = host;
+      host.onProgress = (id, loaded, total) => {
+        const pct = total ? Math.min(99, Math.round((100 * loaded) / total)) : 0;
+        setStatus({ state: 'loading', pct, loaded, total });
+      };
+      await host.loadTranscriber({
+        transcriberId: 'bn',
+        modelArch: lib.ModelArch[T.MODELS[s.model].arch],
+        source: { kind: 'catalog', language: s.lang }
+      });
+      if (engine !== e) throw new Error('speech engine stopped');
+      e.loaded = true;
+      setStatus({ state: 'ready', model: s.model, language: s.lang });
+      return { model: s.model, language: s.lang };
     })();
-    e.ready.catch(() => { });
+    e.ready.catch((err) => {
+      if (engine !== e) return;
+      engine = null;
+      lastFailure = Date.now();
+      try { if (e.host) e.host.close(); } catch (x) { /* ignore */ }
+      setStatus({ state: 'error', message: friendly(err) });
+    });
     return e.ready;
   };
-
-  function startWorker(e, device, info, s) {
-    return new Promise((resolve, reject) => {
-      let worker;
-      try { worker = new Worker('./js/transcribe-worker.js', { type: 'module' }); }
-      catch (err) { reject(new Error('Speech recognition is not supported in this browser')); return; }
-      if (e.worker) { try { e.worker.terminate(); } catch (err) { /* ignore */ } }
-      e.worker = worker;
-      e.device = null;
-      setStatus({ state: 'loading', pct: 0, device });
-      worker.onmessage = (ev) => {
-        const m = ev.data;
-        if (m.type === 'progress') {
-          const pct = m.total ? Math.min(99, Math.round((100 * m.loaded) / m.total)) : 0;
-          setStatus({ state: 'loading', pct, loaded: m.loaded, total: m.total, device });
-        } else if (m.type === 'ready') {
-          e.device = m.device;
-          setStatus({ state: 'ready', device: m.device });
-          resolve();
-        } else if (m.type === 'error') {
-          try { worker.terminate(); } catch (err) { /* ignore */ }
-          if (e.worker === worker) e.worker = null;
-          reject(new Error(m.message));
-        } else if (m.type === 'result') {
-          const p = e.pending.get(m.id);
-          if (p) { e.pending.delete(m.id); p.resolve(m); }
-        }
-      };
-      worker.onerror = (err) => {
-        try { worker.terminate(); } catch (e2) { /* ignore */ }
-        if (e.worker === worker) e.worker = null;
-        reject(new Error((err && err.message) || 'speech worker failed'));
-      };
-      worker.postMessage({
-        type: 'init',
-        cfg: {
-          libUrl: cfg.libUrl, hubHost: cfg.hubHost, hubPathTemplate: cfg.hubPathTemplate, wasmPaths: cfg.wasmPaths,
-          modelId: info.id, multilingual: info.multilingual, language: s.language, device
-        }
-      });
-    });
-  }
 
   T.dispose = function () {
     if (!engine) return;
     const e = engine;
     engine = null;
-    const w = e.worker;
-    e.worker = null;
-    if (w) {
-      try { w.postMessage({ type: 'dispose' }); } catch (err) { /* ignore */ }
-      setTimeout(() => { try { w.terminate(); } catch (err) { /* ignore */ } }, 300);
-    }
-    for (const p of e.pending.values()) p.resolve({ text: '', error: 'disposed' });
-    e.pending.clear();
+    try { if (e.host) e.host.close(); } catch (x) { /* ignore */ }
     setStatus({ state: 'idle' });
   };
 
   document.addEventListener('bn:settings-changed', (ev) => {
-    if (['audio.model', 'audio.language', 'audio.compute'].includes(ev.detail.key) && engine) T.dispose();
+    if (['audio.model', 'audio.language'].includes(ev.detail.key) && engine) T.dispose();
   });
 
-  async function transcribePCM(pcm) {
-    await T.ensureEngine();
-    const e = engine;
-    if (!e || !e.worker) throw new Error('speech engine stopped');
-    const id = e.nextId++;
-    return new Promise((resolve) => {
-      e.pending.set(id, { resolve });
-      e.worker.postMessage({ type: 'transcribe', id, pcm }, [pcm.buffer]);
-    });
-  }
-
-  const JUNK = /^(thank you\.?|thanks for watching\.?|you\.?|bye\.?|[.…\-–— ]+)$/i;
   function clean(t) {
     t = String(t || '').replace(/\s+/g, ' ').trim();
-    if (!t || !/[\p{L}\p{N}]/u.test(t) || JUNK.test(t)) return '';
-    return t;
+    return /[\p{L}\p{N}]/u.test(t) ? t : '';
   }
 
-  /* ---------------- pause-based chunker (gives passages their timestamps) ---------------- */
-
-  function createChunker(onChunk, opts) {
-    const o = Object.assign({ preRollMs: 300, minSpeechMs: 350, endSilenceMs: 450, maxChunkMs: 10000, trimTailMs: 250 }, opts || {});
-    let floor = 0.012;
-    let frameBuf = new Float32Array(FRAME), fb = 0;
-    const pre = [];
-    let chunk = [], chunkStart = 0, speechMs = 0, silenceMs = 0, inSpeech = false, sampleIndex = 0;
-    let lowest = { rms: Infinity, idx: -1 };
-
-    function rmsOf(f) { let s = 0; for (let i = 0; i < f.length; i++) s += f[i] * f[i]; return Math.sqrt(s / f.length); }
-    function emit(frames, startIdx, trimFrames) {
-      const n = frames.length - trimFrames;
-      if (n <= 0) return;
-      const pcm = new Float32Array(n * FRAME);
-      for (let i = 0; i < n; i++) pcm.set(frames[i], i * FRAME);
-      onChunk({ pcm, t0: (startIdx / SR) * 1000, t1: ((startIdx + n * FRAME) / SR) * 1000 });
-    }
-    function frame(f, idx) {
-      const rms = rmsOf(f);
-      if (rms < floor) floor = Math.max(0.002, floor * 0.9 + rms * 0.1); else floor = Math.min(0.05, floor * 1.004);
-      const speech = rms > Math.max(floor * 3, 0.008);
-      if (!inSpeech) {
-        pre.push(f);
-        if (pre.length > o.preRollMs / 20) pre.shift();
-        if (speech) {
-          inSpeech = true;
-          chunk = pre.slice();
-          chunkStart = idx - (chunk.length - 1) * FRAME;
-          speechMs = 20; silenceMs = 0;
-          pre.length = 0;
-          lowest = { rms: Infinity, idx: -1 };
-        }
-        return;
-      }
-      chunk.push(f);
-      if (speech) { speechMs += 20; silenceMs = 0; } else silenceMs += 20;
-      const chunkMs = chunk.length * 20;
-      if (chunkMs > o.maxChunkMs - 1500 && rms < lowest.rms) lowest = { rms, idx: chunk.length - 1 };
-      if (silenceMs >= o.endSilenceMs) {
-        if (speechMs >= o.minSpeechMs) emit(chunk, chunkStart, Math.max(0, Math.floor((silenceMs - o.trimTailMs) / 20)));
-        inSpeech = false; chunk = [];
-        return;
-      }
-      if (chunkMs >= o.maxChunkMs) {
-        const cut = lowest.idx > 0 ? lowest.idx : chunk.length - 1;
-        emit(chunk.slice(0, cut), chunkStart, 0);
-        const rest = chunk.slice(cut);
-        chunkStart += cut * FRAME;
-        chunk = rest; speechMs = rest.length * 20; silenceMs = 0;
-        lowest = { rms: Infinity, idx: -1 };
-      }
-    }
+  // A worker-side stream. Finished lines arrive with their own timestamps (seconds from
+  // the start of the stream); partial text arrives while a line is still being spoken.
+  let streamSeq = 0;
+  async function openStream(onLine, onPartial) {
+    await T.ensureEngine();
+    const e = engine;
+    if (!e) throw new Error('speech engine stopped');
+    const id = 'bn-' + (++streamSeq);
+    const lines = new Map();
+    e.host.setListener(id, {
+      onLineUpdated: (ev) => { if (onPartial && ev.line && !ev.line.isComplete) onPartial(clean(ev.line.text)); },
+      onLineCompleted: (ev) => {
+        const l = ev.line;
+        const text = clean(l.text);
+        if (!text) return;
+        const seg = { t0: Math.round(l.startTime * 1000), t1: Math.round((l.startTime + l.duration) * 1000), text };
+        lines.set(l.id, seg);
+        if (onLine) onLine(seg);
+      },
+      onError: (ev) => setStatus({ state: 'error', message: friendly(ev.error) })
+    });
+    await e.host.createStream('bn', id, { updateInterval: 0.5 });
+    await e.host.start(id);
     return {
-      push(samples) {
-        let i = 0;
-        while (i < samples.length) {
-          const take = Math.min(samples.length - i, FRAME - fb);
-          frameBuf.set(samples.subarray(i, i + take), fb);
-          fb += take; i += take;
-          if (fb === FRAME) { frame(frameBuf, sampleIndex); sampleIndex += FRAME; frameBuf = new Float32Array(FRAME); fb = 0; }
-        }
-      },
-      flush() {
-        if (inSpeech && speechMs >= 400) emit(chunk, chunkStart, 0);
-        inSpeech = false; chunk = [];
-      },
-      samples() { return sampleIndex; }
+      push(pcm) { if (engine === e && pcm && pcm.length) e.host.addAudio(id, pcm, SR); },
+      queued() { return engine === e ? e.host.queuedSeconds(id) : 0; },
+      async stop() {
+        if (engine !== e) return [...lines.values()];
+        try { await e.host.stop(id); } catch (x) { /* ignore */ }
+        try { await e.host.closeStream(id); } catch (x) { /* ignore */ }
+        return [...lines.values()].sort((a, b) => a.t0 - b.t0);
+      }
     };
   }
 
-  // Chunks split by a mere breath are joined into one passage (easier to read and tap).
-  function mergePassages(segs) {
-    const out = [];
-    for (const s of segs) {
-      const prev = out[out.length - 1];
-      if (prev && s.t0 - prev.t1 < 500 && s.t1 - prev.t0 <= 25000) {
-        prev.text = (prev.text + ' ' + s.text).replace(/\s+/g, ' ');
-        prev.t1 = Math.max(prev.t1, s.t1);
-      } else out.push({ t0: s.t0, t1: s.t1, text: s.text });
-    }
-    return out;
-  }
-
-  // Sends chunks to the model and collects passages in order.
-  function createCollector(offsetMs, onSegment) {
-    const segs = [], promises = [];
-    let lastText = '';
-    const col = {
-      segs, promises, error: null,
-      take(c) {
-        const p = transcribePCM(c.pcm).then((r) => {
-          const text = clean(r.text);
-          if (!text || text === lastText) return;
-          lastText = text;
-          const off = typeof offsetMs === 'function' ? offsetMs() : offsetMs;
-        const seg = { t0: Math.round(c.t0 + off), t1: Math.round(c.t1 + off), text };
-          segs.push(seg);
-          if (onSegment) onSegment(seg);
-        }).catch((err) => { col.error = err; });
-        promises.push(p);
-        return p;
-      },
-      async settle() { await Promise.allSettled(promises); return mergePassages(segs.sort((a, b) => a.t0 - b.t0)); }
-    };
-    return col;
-  }
-
-  /* ---------------- live: tap the microphone while recording ---------------- */
+  /* ---------------- microphone tap (shared with the recorder) ---------------- */
 
   let sharedCtx = null;
   // Call synchronously inside a tap: browsers only let audio start from a user gesture.
@@ -306,40 +178,46 @@
   T.createLiveSession = function (stream, h) {
     h = h || {};
     const ctx = T.touchAudio();
-    let node = null, src = null, offset = null, stopped = false;
-    let dead = false;
-    const chunker = createChunker((c) => { if (!dead && !collector.error) collector.take(c); });
-    const collector = createCollector(() => offset || 0, (seg) => { if (h.onSegment) h.onSegment(seg); });
     const startedAt = h.startedAt || Date.now();
+    const segs = [];
+    const early = []; // audio captured while the model is still loading
+    let node = null, src = null, offset = null, stopped = false, s = null;
 
     const ready = (async () => {
       if (!ctx) throw new Error('Audio is not available');
-      T.ensureEngine().catch(() => { });
       node = await captureNode(ctx);
       src = ctx.createMediaStreamSource(stream);
       src.connect(node);
       node.connect(ctx.destination); // the worklet outputs silence; connecting keeps it running
-      node.port.onmessage = (e) => {
-        if (stopped && !(e.data && e.data.length)) return;
-        if (offset == null) offset = Math.max(0, Date.now() - startedAt - (e.data.length / SR) * 1000);
-        chunker.push(e.data);
+      node.port.onmessage = (ev) => {
+        const pcm = ev.data;
+        if (!pcm || !pcm.length) return;
+        if (offset == null) offset = Math.max(0, Date.now() - startedAt - (pcm.length / SR) * 1000);
+        if (s) s.push(pcm);
+        else if (!stopped && early.length < 30 * 60 * (SR / 1024)) early.push(pcm);
       };
-      await T.ensureEngine();
+      s = await openStream((seg) => {
+        const out = { t0: seg.t0 + (offset || 0), t1: seg.t1 + (offset || 0), text: seg.text };
+        segs.push(out);
+        if (h.onSegment) h.onSegment(out);
+      }, (text) => { if (h.onPartial) h.onPartial(text); });
+      for (const b of early) s.push(b);
+      early.length = 0;
     })();
-    ready.catch(() => { dead = true; });
+    ready.catch(() => { early.length = 0; });
 
     return {
       ready,
-      segments: collector.segs,
+      segments: segs,
       async stop() {
         stopped = true;
         try { if (node) node.port.postMessage('stop'); } catch (e) { /* ignore */ }
         await new Promise((r) => setTimeout(r, 80));
-        chunker.flush();
         try { if (src) src.disconnect(); if (node) node.disconnect(); } catch (e) { /* ignore */ }
         if (stream.getAudioTracks().every((t) => t.readyState === 'ended') && ctx && ctx.state === 'running') ctx.suspend().catch(() => { });
-        const segs = await Promise.race([collector.settle(), new Promise((r) => setTimeout(() => r(mergePassages(collector.segs.slice().sort((a, b) => a.t0 - b.t0))), 120000))]);
-        return segs.map((s) => ({ t0: s.t0, t1: s.t1, text: s.text }));
+        try { await ready; } catch (e) { return segs; }
+        if (s) await Promise.race([s.stop(), new Promise((r) => setTimeout(r, 60000))]);
+        return segs.slice().sort((a, b) => a.t0 - b.t0);
       }
     };
   };
@@ -348,10 +226,9 @@
 
   T.transcribeClip = async function (clip, h) {
     h = h || {};
-    const collector = createCollector(0, h.onSegment);
-    const chunker = createChunker((c) => collector.take(c));
     const report = (f) => { if (h.onProgress) h.onProgress(Math.max(0, Math.min(1, f))); };
-    T.ensureEngine().catch(() => { });
+    const segs = [];
+    const s = await openStream((seg) => { segs.push(seg); if (h.onSegment) h.onSegment(seg); }, null);
     const duration = clip.duration || 0;
     let decoded = false;
     if (duration <= 30 * 60 * 1000) {
@@ -362,29 +239,23 @@
         const n = buf.length, ch = buf.numberOfChannels;
         const mono = new Float32Array(n);
         for (let c = 0; c < ch; c++) { const d = buf.getChannelData(c); for (let i = 0; i < n; i++) mono[i] += d[i] / ch; }
-        const step = SR * 5;
+        const step = SR * 2;
         for (let i = 0; i < n; i += step) {
-          chunker.push(mono.subarray(i, Math.min(n, i + step)));
-          report((0.3 * i) / n);
-          await new Promise((r) => setTimeout(r, 0));
+          s.push(mono.slice(i, Math.min(n, i + step))); // a copy: the buffer is handed to the worker
+          while (s.queued() > 20) await new Promise((r) => setTimeout(r, 100));
+          report((0.9 * i) / n);
         }
-        chunker.flush();
         decoded = true;
       } catch (e) { decoded = false; }
     }
-    if (!decoded) await playThrough(clip, chunker, (f) => report(0.3 * f));
-    await T.ensureEngine();
-    const total = collector.promises.length;
-    let done = 0;
-    for (const p of collector.promises) p.then(() => { done++; report(0.3 + (0.7 * done) / Math.max(1, total)); });
-    const segs = await collector.settle();
-    if (collector.error && !segs.length) throw collector.error;
+    if (!decoded) await playThrough(clip, (pcm) => s.push(pcm), (f) => report(0.9 * f));
+    await s.stop();
     report(1);
-    return segs.map((s) => ({ t0: s.t0, t1: s.t1, text: s.text }));
+    return segs.sort((a, b) => a.t0 - b.t0);
   };
 
   // Long recordings: play silently through the capture graph at normal speed.
-  function playThrough(clip, chunker, onProgress) {
+  function playThrough(clip, onPcm, onProgress) {
     return new Promise(async (resolve, reject) => {
       const ctx = T.touchAudio();
       if (!ctx) { reject(new Error('Audio is not available')); return; }
@@ -395,14 +266,14 @@
       const finish = (err) => {
         try { if (src) src.disconnect(); if (node) { node.port.postMessage('stop'); node.disconnect(); } } catch (e) { /* ignore */ }
         URL.revokeObjectURL(url);
-        if (err) reject(err); else { setTimeout(() => { chunker.flush(); resolve(); }, 100); }
+        if (err) reject(err); else setTimeout(resolve, 150);
       };
       try {
         node = await captureNode(ctx);
         src = ctx.createMediaElementSource(audio);
         src.connect(node);
         node.connect(ctx.destination);
-        node.port.onmessage = (e) => { if (e.data && e.data.length) chunker.push(e.data); };
+        node.port.onmessage = (e) => { if (e.data && e.data.length) onPcm(e.data); };
         audio.addEventListener('timeupdate', () => { if (audio.duration) onProgress(audio.currentTime / audio.duration); });
         audio.addEventListener('ended', () => finish(null));
         audio.addEventListener('error', () => finish(new Error('Could not read this recording')));
@@ -411,9 +282,9 @@
     });
   }
 
-  /* ---------------- storage used by the downloaded runtime + model ---------------- */
+  /* ---------------- storage used by the runtime + models ---------------- */
 
-  const isOurCache = (name) => name === 'transformers-cache' || name.startsWith('bn-vendor');
+  const isOurCache = (name) => name === 'moonshine-models-v1' || name === 'transformers-cache' || name.startsWith('bn-vendor');
 
   T.cachedBytes = async function () {
     if (!('caches' in window)) return 0;
