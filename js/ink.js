@@ -1,44 +1,88 @@
-/* BetterNotes — ink engine: input smoothing, variable-width (pressure) stroke
-   outlines, "tidy" beautification, and hold-to-snap shape detection.
+/* BetterNotes — ink engine: stroke stabilization, variable-width (pressure)
+   stroke outlines, "tidy" beautification, and hold-to-snap shape detection.
    All geometry is in world units. */
 (function () {
   'use strict';
   const U = BN.util;
   const Ink = {};
 
-  /* ---------------- input smoothing (incremental EMA) ---------------- */
-
-  // Creates a stateful stabilizer; amount 0..1 (0 = raw, 1 = very steady).
-  // Two layers: a pull-string dead zone (`ropeWorld` radius, world units) — the pen
-  // tip only moves once the pointer leaves it, so hand tremor inside it vanishes —
-  // plus an exponential smoothing pass for rounding.
-  Ink.createSmoother = function (amount, ropeWorld) {
-    const alpha = 1 - 0.8 * U.clamp(amount, 0, 1);
+  /* ---------------- stabilizer ----------------
+     Two stages. 1) A dead zone: the tip only moves once the pointer leaves a small
+     radius, so hand tremor inside it never reaches the page; a sharp reversal of
+     direction is treated as a deliberate cusp and drawn out fully instead of being
+     rounded off. 2) Velocity-weighted averaging: recent samples are averaged with
+     weights that fall off with the distance travelled since them, so slow careful
+     writing is smoothed hard while fast confident strokes stay responsive.
+     amount 0..1; ropeWorld = dead-zone radius (world units); pxPerWorld = zoom. */
+  Ink.createSmoother = function (amount, ropeWorld, pxPerWorld) {
+    const a = U.clamp(amount, 0, 1);
     const rope = Math.max(0, ropeWorld || 0);
-    let last = null;
+    const k = pxPerWorld || 1;
+    const sigma = a <= 0.02 ? 0 : 0.35 + 1.9 * a; // screen px per ms
+    const twoSigma2 = 2 * sigma * sigma;
+    const buf = [];                               // newest first {x,y,p,v}
+    let lastPainted = null, lastLive = null, liveDir = null, lastT = 0;
+
+    function average() {
+      let sx = 0, sy = 0, sp = 0, sw = 0, sv = 0, i = 0;
+      for (; i < buf.length; i++) {
+        const w = Math.exp(-(sv * sv) / twoSigma2);
+        if (w < 0.01) break;
+        sx += w * buf[i].x; sy += w * buf[i].y; sp += w * buf[i].p; sw += w;
+        sv += buf[i].v;
+      }
+      buf.length = Math.max(1, Math.min(buf.length, i));
+      return { x: sx / sw, y: sy / sw, p: sp / sw };
+    }
+    function reset(ev, t) { buf.length = 0; buf.push({ x: ev.x, y: ev.y, p: ev.p, v: 0 }); lastT = t; }
+    function emit(ev, t) {
+      if (sigma === 0) { lastPainted = { x: ev.x, y: ev.y, p: ev.p }; lastT = t; return [{ ...lastPainted }]; }
+      const prev = buf[0];
+      const v = prev ? (Math.hypot(ev.x - prev.x, ev.y - prev.y) * k) / Math.max(1, t - lastT) : 0;
+      buf.unshift({ x: ev.x, y: ev.y, p: ev.p, v });
+      lastT = t;
+      lastPainted = average();
+      return [{ ...lastPainted }];
+    }
+
     return {
+      // Feeds one raw input point; returns 0, 1 or 2 output points.
       push(pt) {
-        if (!last) { last = { x: pt.x, y: pt.y, p: pt.p }; return { ...last }; }
-        let tx = pt.x, ty = pt.y;
-        if (rope > 0) {
-          const dx = pt.x - last.x, dy = pt.y - last.y;
-          const d = Math.hypot(dx, dy);
-          if (d <= rope) {
-            tx = last.x; ty = last.y;
-          } else {
-            const k = (d - rope) / d;
-            tx = last.x + dx * k;
-            ty = last.y + dy * k;
-          }
+        const t = pt.t != null ? pt.t : performance.now();
+        const p = pt.p == null ? 0.5 : pt.p;
+        if (!lastPainted) {
+          lastPainted = { x: pt.x, y: pt.y, p };
+          lastLive = { x: pt.x, y: pt.y, p };
+          reset(lastPainted, t);
+          return [{ ...lastPainted }];
         }
-        last = {
-          x: last.x + (tx - last.x) * alpha,
-          y: last.y + (ty - last.y) * alpha,
-          p: last.p + (pt.p - last.p) * Math.min(1, alpha + 0.25)
-        };
-        return { ...last };
+        const mx = pt.x - lastPainted.x, my = pt.y - lastPainted.y;
+        const d = Math.hypot(mx, my);
+        if (rope > 0 && d <= rope) {
+          lastLive = { x: pt.x, y: pt.y, p };
+          reset(lastPainted, t);
+          return [];
+        }
+        if (rope > 0 && liveDir && (mx * liveDir.x + my * liveDir.y) < 0) {
+          // Direction reversed by more than 90°: a cusp. Draw out to its tip, then back.
+          const tip = { x: lastLive.x, y: lastLive.y, p: lastLive.p };
+          const dx = pt.x - tip.x, dy = pt.y - tip.y;
+          const dn = Math.hypot(dx, dy) || 1;
+          const c = Math.min(1, rope / dn);
+          liveDir = { x: dx * c, y: dy * c };
+          const back = { x: pt.x - liveDir.x, y: pt.y - liveDir.y, p: c * tip.p + (1 - c) * p };
+          lastPainted = back;
+          lastLive = { x: pt.x, y: pt.y, p };
+          reset(back, t);
+          return [tip, { ...back }];
+        }
+        lastLive = { x: pt.x, y: pt.y, p };
+        liveDir = { x: mx, y: my };
+        const ratio = rope > 0 ? rope / d : 0;
+        return emit({ x: pt.x - ratio * mx, y: pt.y - ratio * my, p }, t);
       },
-      reset() { last = null; }
+      live() { return lastLive ? { ...lastLive } : null; },
+      last() { return lastPainted ? { ...lastPainted } : null; }
     };
   };
 
@@ -55,15 +99,13 @@
 
   Ink.widthAt = function (p, size, pressureAmount) {
     const pr = (p == null || p === 0) ? 0.5 : p;
-    // Neutral width at pressure 0.5; pressureAmount scales how much pressure matters.
     const f = 1 + (pr - 0.5) * 2 * U.clamp(pressureAmount, 0, 1);
     return Math.max(0.3, size * f);
   };
 
-  /* ---------------- stroke rendering paths ---------------- */
+  /* ---------------- stroke geometry ---------------- */
 
-  // Centerline path through midpoints (smooth quadratic) — used for
-  // highlighter (constant width) and hit previews.
+  // Centerline path through midpoints (smooth quadratic) — highlighter & previews.
   Ink.centerlinePath = function (pts) {
     const path = new Path2D();
     if (!pts.length) return path;
@@ -71,22 +113,21 @@
     if (pts.length === 1) { path.lineTo(pts[0].x + 0.01, pts[0].y); return path; }
     if (pts.length === 2) { path.lineTo(pts[1].x, pts[1].y); return path; }
     for (let i = 1; i < pts.length - 1; i++) {
-      const mx = (pts[i].x + pts[i + 1].x) / 2, my = (pts[i].y + pts[i + 1].y) / 2;
-      path.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+      path.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2);
     }
     path.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
     return path;
   };
 
-  // Variable-width outline polygon for pressure ink. Returns a closed Path2D.
-  // opts.taper thins the stroke toward both ends for a natural pen lift.
-  Ink.outlinePath = function (pts, size, pressureAmount, opts) {
-    const path = new Path2D();
-    if (!pts.length) return path;
+  // The variable-width outline as drawing commands, shared by the canvas renderer
+  // and the PDF writer: {t:'M'|'L'} with x,y; {t:'Q'} with cx,cy,x,y; {t:'A'} arc with
+  // cx,cy,r,a0,a1 (clockwise in screen coords); {t:'C'} full circle cx,cy,r; {t:'Z'}.
+  Ink.outlineCommands = function (ptsIn, size, pressureAmount, opts) {
+    let pts = ptsIn;
+    if (!pts.length) return [];
     if (pts.length === 1) {
-      const r = Ink.widthAt(pts[0].p, size, pressureAmount) / 2;
-      path.arc(pts[0].x, pts[0].y, Math.max(r, 0.3), 0, Math.PI * 2);
-      return path;
+      const r = Math.max(Ink.widthAt(pts[0].p, size, pressureAmount) / 2, 0.3);
+      return [{ t: 'C', cx: pts[0].x, cy: pts[0].y, r }];
     }
     let n = pts.length;
     let arc = new Array(n);
@@ -101,8 +142,8 @@
     let taperLen = 0;
     if (opts && opts.taper && total > size * 1.5) {
       taperLen = U.clamp(total * 0.22, size * 0.8, size * 3.2);
-      // Taper is evaluated per vertex, so sparse strokes (a fast straight line is just
-      // two vertices) need interior points or the whole segment inherits the tip width.
+      // Taper is evaluated per vertex: sparse strokes need interior points or the
+      // whole segment inherits the tip width.
       if (maxSeg > taperLen / 2) {
         pts = U.resample(pts, Math.max(1.5, taperLen / 3));
         n = pts.length;
@@ -137,31 +178,42 @@
       left.push({ x: pts[i].x - dy * r, y: pts[i].y + dx * r });
       right.push({ x: pts[i].x + dy * r, y: pts[i].y - dx * r });
     }
-    const startR = radii[0];
-    const endR = radii[n - 1];
-    path.moveTo(left[0].x, left[0].y);
+    const cmds = [{ t: 'M', x: left[0].x, y: left[0].y }];
     for (let i = 1; i < n; i++) {
-      const mx = (left[i - 1].x + left[i].x) / 2, my = (left[i - 1].y + left[i].y) / 2;
-      path.quadraticCurveTo(left[i - 1].x, left[i - 1].y, mx, my);
+      cmds.push({ t: 'Q', cx: left[i - 1].x, cy: left[i - 1].y, x: (left[i - 1].x + left[i].x) / 2, y: (left[i - 1].y + left[i].y) / 2 });
     }
-    path.lineTo(left[n - 1].x, left[n - 1].y);
-    // end cap
-    capArc(path, pts[n - 1], left[n - 1], right[n - 1], endR);
+    cmds.push({ t: 'L', x: left[n - 1].x, y: left[n - 1].y });
+    cmds.push(capArc(pts[n - 1], left[n - 1], right[n - 1], radii[n - 1]));
     for (let i = n - 2; i >= 0; i--) {
-      const mx = (right[i + 1].x + right[i].x) / 2, my = (right[i + 1].y + right[i].y) / 2;
-      path.quadraticCurveTo(right[i + 1].x, right[i + 1].y, mx, my);
+      cmds.push({ t: 'Q', cx: right[i + 1].x, cy: right[i + 1].y, x: (right[i + 1].x + right[i].x) / 2, y: (right[i + 1].y + right[i].y) / 2 });
     }
-    path.lineTo(right[0].x, right[0].y);
-    capArc(path, pts[0], right[0], left[0], startR);
-    path.closePath();
-    return path;
+    cmds.push({ t: 'L', x: right[0].x, y: right[0].y });
+    cmds.push(capArc(pts[0], right[0], left[0], radii[0]));
+    cmds.push({ t: 'Z' });
+    return cmds;
   };
 
-  function capArc(path, center, from, to, r) {
-    const a0 = Math.atan2(from.y - center.y, from.x - center.x);
-    const a1 = Math.atan2(to.y - center.y, to.x - center.x);
-    path.arc(center.x, center.y, Math.max(r, 0.2), a0, a1, false);
+  function capArc(center, from, to, r) {
+    return {
+      t: 'A', cx: center.x, cy: center.y, r: Math.max(r, 0.2),
+      a0: Math.atan2(from.y - center.y, from.x - center.x),
+      a1: Math.atan2(to.y - center.y, to.x - center.x)
+    };
   }
+
+  // Variable-width outline polygon for pressure ink. Returns a closed Path2D.
+  Ink.outlinePath = function (pts, size, pressureAmount, opts) {
+    const path = new Path2D();
+    for (const c of Ink.outlineCommands(pts, size, pressureAmount, opts)) {
+      if (c.t === 'M') path.moveTo(c.x, c.y);
+      else if (c.t === 'L') path.lineTo(c.x, c.y);
+      else if (c.t === 'Q') path.quadraticCurveTo(c.cx, c.cy, c.x, c.y);
+      else if (c.t === 'A') path.arc(c.cx, c.cy, c.r, c.a0, c.a1, false);
+      else if (c.t === 'C') path.arc(c.cx, c.cy, c.r, 0, Math.PI * 2);
+      else if (c.t === 'Z') path.closePath();
+    }
+    return path;
+  };
 
   /* ---------------- tidy (beautify messy ink) ---------------- */
 
@@ -172,12 +224,11 @@
     let out = U.resample(pts, Math.max(1.5, len / 220));
     const passes = s < 0.34 ? 1 : s < 0.67 ? 2 : 3;
     for (let i = 0; i < passes; i++) out = U.chaikin(out);
-    // Even out pressure so width variation calms down.
     let mean = 0;
     for (const p of out) mean += (p.p ?? 0.5);
     mean /= out.length;
-    const k = 0.35 + 0.5 * s;
-    for (const p of out) p.p = (p.p ?? 0.5) + (mean - (p.p ?? 0.5)) * k;
+    const kk = 0.35 + 0.5 * s;
+    for (const p of out) p.p = (p.p ?? 0.5) + (mean - (p.p ?? 0.5)) * kk;
     return U.rdp(out, 0.3);
   };
 
@@ -195,29 +246,20 @@
     const closed = gap < Math.max(18, len * 0.16);
 
     if (!closed) {
-      // Straight line? max deviation from the chord.
       let maxD = 0;
       for (const p of pts) maxD = Math.max(maxD, U.pointSegDist(p.x, p.y, first.x, first.y, last.x, last.y));
-      if (maxD < Math.max(6, len * 0.05)) {
-        return snapLine(first, last);
-      }
+      if (maxD < Math.max(6, len * 0.05)) return snapLine(first, last);
       return null;
     }
 
     const bb = U.bboxOfPoints(pts, 0);
     if (bb.w < 12 || bb.h < 12) return null;
     const cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
-
-    // Ellipse fit: radial distance (normalized by bbox radii) should be ~1.
     const rx = bb.w / 2, ry = bb.h / 2;
     let devSum = 0;
-    for (const p of pts) {
-      const d = Math.hypot((p.x - cx) / rx, (p.y - cy) / ry);
-      devSum += Math.abs(d - 1);
-    }
+    for (const p of pts) devSum += Math.abs(Math.hypot((p.x - cx) / rx, (p.y - cy) / ry) - 1);
     const ellipseErr = devSum / pts.length;
 
-    // Polygon fit via aggressive simplification.
     const simplified = U.rdp(pts, Math.max(6, len * 0.035));
     const corners = dedupeClosePoints(simplified, Math.max(10, len * 0.05));
 
@@ -230,6 +272,21 @@
     if (corners.length === 3) return snapPolygon(corners.slice(0, 3));
     if (ellipseErr < 0.24) return snapEllipse(cx, cy, rx, ry);
     return null;
+  };
+
+  // A deliberately straight-looking stroke (long, barely bowed) → perfect line,
+  // without any hold. Returns points or null.
+  Ink.autoStraighten = function (pts, size) {
+    if (pts.length < 2) return null;
+    const first = pts[0], last = pts[pts.length - 1];
+    const chord = U.dist(first.x, first.y, last.x, last.y);
+    if (chord < Math.max(40, size * 8)) return null;
+    const len = U.pathLength(pts);
+    if (len > chord * 1.06) return null; // wandering path, not a line
+    let maxD = 0;
+    for (const p of pts) maxD = Math.max(maxD, U.pointSegDist(p.x, p.y, first.x, first.y, last.x, last.y));
+    if (maxD > Math.max(2, chord * 0.02)) return null;
+    return snapLine(first, last);
   };
 
   function dedupeClosePoints(pts, minGap) {
@@ -246,7 +303,7 @@
       const a = quad[i], b = quad[(i + 1) % 4], c = quad[(i + 2) % 4];
       const v1x = a.x - b.x, v1y = a.y - b.y, v2x = c.x - b.x, v2y = c.y - b.y;
       const dot = (v1x * v2x + v1y * v2y) / ((Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y)) || 1);
-      if (Math.abs(dot) > 0.5) return false; // > 60° off right angle
+      if (Math.abs(dot) > 0.5) return false;
     }
     return true;
   }
@@ -260,14 +317,20 @@
     return out;
   }
 
+  // Lines snap to the nearest 15° when within 5° of it (so hand-drawn axes,
+  // diagonals and isometric lines come out exact).
   function snapLine(a, b) {
-    // Snap near-horizontal / near-vertical to exact.
     const ang = Math.atan2(b.y - a.y, b.x - a.x);
-    const deg = (ang * 180) / Math.PI;
+    const step = Math.PI / 12;
+    const snapped = Math.round(ang / step) * step;
     let bx = b.x, by = b.y;
-    const near = (v, t) => Math.abs(((v % 180) + 180) % 180 - t) < 6 || Math.abs(((v % 180) + 180) % 180 - (t + 180)) < 6;
-    if (near(deg, 0) || near(deg, 180)) by = a.y;
-    else if (near(deg, 90)) bx = a.x;
+    if (Math.abs(snapped - ang) < (5 * Math.PI) / 180) {
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      bx = a.x + Math.cos(snapped) * len;
+      by = a.y + Math.sin(snapped) * len;
+      if (Math.abs(Math.sin(snapped)) < 1e-9) by = a.y;
+      if (Math.abs(Math.cos(snapped)) < 1e-9) bx = a.x;
+    }
     return line(a, { x: bx, y: by }, 24);
   }
 
@@ -279,9 +342,7 @@
 
   function snapPolygon(corners) {
     const out = [];
-    for (let i = 0; i < corners.length; i++) {
-      out.push(...line(corners[i], corners[(i + 1) % corners.length], 14));
-    }
+    for (let i = 0; i < corners.length; i++) out.push(...line(corners[i], corners[(i + 1) % corners.length], 14));
     return out;
   }
 

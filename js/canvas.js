@@ -113,7 +113,7 @@
     const style = note.paper.style || 'blank';
     const lum = hexLum(paperColor);
     this.paperLum = lum;
-    this.blendHigh = lum > 0.5 ? 'multiply' : 'source-over';
+    this.blendHigh = lum > 0.5 ? 'multiply' : 'lighten';
     if (style === 'blank') return;
     const spacing = style === 'music' ? 9 : (note.paper.spacing || 32);
     // Skip rules that would be sub-pixel mush (dots earlier: unbounded grids get big).
@@ -137,7 +137,7 @@
     let y0 = Math.floor(ya / spacing) * spacing;
     if (!infinite) { x0 = Math.max(x0, spacing); y0 = Math.max(y0, spacing); }
 
-    if (style === 'lines' || style === 'grid' || style === 'cornell') {
+    if (style === 'lines' || style === 'grid' || style === 'cornell' || style === 'college') {
       ctx.beginPath();
       for (let y = y0; y <= yb; y += spacing) { ctx.moveTo(xa, y); ctx.lineTo(xb, y); }
       ctx.stroke();
@@ -150,6 +150,14 @@
       ctx.beginPath();
       ctx.moveTo(cueX, ya); ctx.lineTo(cueX, yb);
       if (!infinite) { const sy = bounds.h * 0.8; ctx.moveTo(xa, sy); ctx.lineTo(xb, sy); }
+      ctx.stroke();
+    }
+    if (style === 'college') {
+      const mx = infinite ? 120 : bounds.w * 0.12;
+      ctx.strokeStyle = lum > 0.5 ? 'rgba(220,80,80,0.5)' : 'rgba(255,140,140,0.5)';
+      ctx.lineWidth = 1.2 / this.t.s;
+      ctx.beginPath();
+      ctx.moveTo(mx, ya); ctx.lineTo(mx, yb);
       ctx.stroke();
     }
     if (style === 'music') {
@@ -184,15 +192,20 @@
     return (0.299 * parseInt(c.slice(1, 3), 16) + 0.587 * parseInt(c.slice(3, 5), 16) + 0.114 * parseInt(c.slice(5, 7), 16)) / 255;
   }
 
-  // Keeps ink readable when paper and ink are both dark (or both light).
-  Renderer.prototype.inkColor = function (c) {
+  // Keeps ink readable when paper and ink are both dark (or both light) by
+  // inverting the color's lightness while leaving hue and saturation alone.
+  BN.inkColorFor = function (c, paperLum) {
     if (BN.Settings && BN.Settings.get('appearance.autoInk') === false) return c;
-    if (this.paperLum == null) return c;
-    const l = hexLum(c);
-    if (this.paperLum < 0.4 && l < 0.35) return '#e8e8f0';
-    if (this.paperLum >= 0.4 && l > 0.9) return '#1d1d2e';
-    return c;
+    if (paperLum == null || !/^#[0-9a-fA-F]{6}$/.test(c || '')) return c;
+    const ch = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255);
+    const mx = Math.max(...ch), mn = Math.min(...ch);
+    const light = (mx + mn) / 2;
+    const flip = (paperLum < 0.4 && light < 0.5) || (paperLum >= 0.4 && light > 0.92);
+    if (!flip) return c;
+    const shift = 1 - mx - mn;
+    return '#' + ch.map((v) => Math.round(U.clamp(v + shift, 0, 1) * 255).toString(16).padStart(2, '0')).join('');
   };
+  Renderer.prototype.inkColor = function (c) { return BN.inkColorFor(c, this.paperLum); };
 
   Renderer.prototype.drawItem = function (ctx, item, opts) {
     opts = opts || {};

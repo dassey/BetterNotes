@@ -9,8 +9,13 @@
   const SCHEMA = [
     { section: 'Pencil & input' },
     {
-      key: 'input.pencilOnly', label: 'Draw with Pencil only', type: 'toggle', def: false,
-      desc: 'Palm rejection: only Apple Pencil draws. One finger scrolls, pinch zooms. Turn off to draw with a finger (then use two fingers to scroll/zoom).'
+      key: 'input.fingerMode', label: 'Fingers', type: 'select', def: 'auto',
+      options: [['auto', 'Draw until a Pencil is seen'], ['draw', 'Always draw'], ['pan', 'Never draw (Pencil only)']],
+      desc: 'Automatic: fingers draw until this device sees an Apple Pencil, then they only scroll and zoom (palm rejection). You can change it any time.'
+    },
+    {
+      key: 'input.penTouchTimeout', label: 'Ignore fingers after Pencil', type: 'range', min: 300, max: 2000, step: 100, def: 1000, unit: 'ms',
+      desc: 'While fingers are allowed to draw, a finger touch this soon after Pencil activity scrolls instead of drawing.'
     },
     {
       key: 'input.pressure', label: 'Pressure sensitivity', type: 'toggle', def: true,
@@ -35,6 +40,10 @@
     {
       key: 'input.prediction', label: 'Stroke prediction', type: 'toggle', def: true,
       desc: 'Uses predicted pen positions to cut visible lag while drawing.'
+    },
+    {
+      key: 'input.autoStraighten', label: 'Auto-straighten lines', type: 'toggle', def: true,
+      desc: 'A long stroke that is almost perfectly straight becomes a straight line on lift — no hold needed. Lines snap to 15° steps.'
     },
     {
       key: 'input.shapeSnap', label: 'Hold to snap shapes', type: 'toggle', def: true,
@@ -92,7 +101,7 @@
     },
     {
       key: 'paper.style', label: 'Paper style', type: 'select', def: 'lines',
-      options: [['lines', 'Lined'], ['grid', 'Grid'], ['dots', 'Dots'], ['cornell', 'Cornell notes'], ['music', 'Music staff'], ['blank', 'Blank']]
+      options: [['lines', 'Lined'], ['college', 'College ruled'], ['grid', 'Grid'], ['dots', 'Dots'], ['cornell', 'Cornell notes'], ['music', 'Music staff'], ['blank', 'Blank']]
     },
     { key: 'paper.spacing', label: 'Line spacing', type: 'range', min: 20, max: 64, step: 2, def: 32 },
     { key: 'paper.color', label: 'Paper color', type: 'color', def: '#ffffff' },
@@ -152,6 +161,9 @@
     for (const item of SCHEMA) {
       if (!item.key) continue;
       Settings.values[item.key] = (item.key in stored) ? stored[item.key] : item.def;
+    }
+    if (stored['input.pencilOnly'] === true && !('input.fingerMode' in stored)) {
+      Settings.values['input.fingerMode'] = 'pan';
     }
   };
 
