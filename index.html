@@ -116,6 +116,17 @@
       <div id="penBar" hidden></div>
       <button id="zoomChip" aria-label="Zoom level — tap to fit">100%</button>
       <div id="recPill" hidden><i></i><span>0:00</span></div>
+      <div id="liveCaption" hidden></div>
+      <div id="transcriptPanel" hidden>
+        <div class="tp-head">
+          <strong>Transcript</strong>
+          <span class="tp-status"></span>
+          <button class="tp-transcribe" hidden>Transcribe</button>
+          <button class="tp-copy" aria-label="Copy transcript" title="Copy transcript">⧉</button>
+          <button class="tp-close" aria-label="Close transcript">✕</button>
+        </div>
+        <div class="tp-list"></div>
+      </div>
       <div id="audioBar" hidden>
         <button class="ab-play" aria-label="Play">▶</button>
         <input type="range" min="0" max="1" value="0" aria-label="Scrub recording">
@@ -123,6 +134,7 @@
         <span class="ab-label">Recording</span>
         <button class="ab-prev" aria-label="Previous recording">‹</button>
         <button class="ab-next" aria-label="Next recording">›</button>
+        <button class="ab-text" aria-label="Transcript" title="Transcript">≡</button>
         <button class="ab-del" aria-label="Delete recording">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l.8 13h9.4l.8-13"/></svg>
         </button>
@@ -199,6 +211,7 @@
 
         <h3>Recording a lecture</h3>
         <p>Tap the microphone, then write as usual — everything you write while recording is <strong>time-stamped to the audio</strong>. Later, press play: your notes dim and reappear in sync, and tapping any word with the hand tool jumps the recording to the moment you wrote it. Recordings live inside the note on your device, never uploaded.</p>
+        <p><strong>Speech to text.</strong> The first time you tap record, BetterNotes offers to download a small open speech model (about 50 MB, once). Say yes and what is said shows up as live captions and is kept as a transcript next to the player: tap a passage to jump the audio there, copy it, search for it from the home screen, and it travels along in the PDF export. Everything runs on this device; nothing is uploaded. Older recordings can be transcribed later from the transcript panel, and you can change your mind any time under Settings → Audio recording.</p>
 
         <h3>Photos</h3>
         <p>Tap the photo button to insert images; drag to move. <strong>Corner handles</strong> resize keeping proportions; <strong>side handles</strong> stretch one direction freely. Select a photo and tap <strong>Crop</strong> to trim it — the crop is non-destructive, so cropping again can bring the edges back. (A selected text box gets side handles too, for its wrap width.) Images are stored inside the note on your device.</p>
@@ -241,6 +254,7 @@
   <script src="./js/settings.js"></script>
   <script src="./js/canvas.js"></script>
   <script src="./js/pdf.js"></script>
+  <script src="./js/transcribe.js"></script>
   <script src="./js/editor.js"></script>
   <script src="./js/home.js"></script>
   <script src="./js/app.js"></script>

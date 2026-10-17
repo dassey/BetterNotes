@@ -57,11 +57,20 @@
     await reqP(tx('notes', 'readwrite').put(clone));
     const meta = {
       id: note.id, title: note.title, created: note.created, modified: note.modified,
-      folder: note.folder || '', items: note.items.length, thumb: thumbDataURL || (await Store.getMeta(note.id))?.thumb || null
+      folder: note.folder || '', items: note.items.length, thumb: thumbDataURL || (await Store.getMeta(note.id))?.thumb || null,
+      words: searchWords(note)
     };
     await reqP(tx('meta', 'readwrite').put(meta));
     return meta;
   };
+
+  // Text the home-screen search can match: typed text and spoken words (transcripts).
+  function searchWords(note) {
+    const parts = [];
+    for (const it of note.items) if (it.type === 'text' && it.text) parts.push(it.text);
+    for (const c of note.audio || []) if (Array.isArray(c.transcript)) for (const s of c.transcript) parts.push(s.text);
+    return parts.join(' ').toLowerCase().replace(/\s+/g, ' ').slice(0, 20000);
+  }
 
   Store.getMeta = (id) => reqP(tx('meta', 'readonly').get(id));
 

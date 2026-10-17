@@ -129,7 +129,7 @@
   function renderGrid() {
     renderFolders();
     let list = folder ? metas.filter((m) => m.folder === folder) : metas;
-    list = query ? list.filter((m) => (m.title || '').toLowerCase().includes(query)) : list;
+    list = query ? list.filter((m) => (m.title || '').toLowerCase().includes(query) || (m.words || '').includes(query)) : list;
     el.grid.innerHTML = '';
     el.empty.hidden = list.length > 0;
     for (const m of list) el.grid.appendChild(card(m));

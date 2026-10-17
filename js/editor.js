@@ -55,7 +55,9 @@
       zoomChip: document.getElementById('zoomChip'),
       recordBtn: document.getElementById('ed-record'),
       recPill: document.getElementById('recPill'),
-      audioBar: document.getElementById('audioBar')
+      audioBar: document.getElementById('audioBar'),
+      liveCaption: document.getElementById('liveCaption'),
+      transcriptPanel: document.getElementById('transcriptPanel')
     };
     bindAudioBar();
     el.zoomChip.addEventListener('click', fitContent);
@@ -751,6 +753,9 @@
       app.toast('Recording is not supported in this browser', true);
       return;
     }
+    if (BN.Transcribe) BN.Transcribe.touchAudio(); // audio may only start inside the tap itself
+    const transcribe = await decideTranscription(false);
+    if (rec || !note) return;
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch (e) { app.toast('Microphone access was denied', true); return; }
@@ -766,6 +771,7 @@
     stopPlayback();
     rec = { recorder, stream, chunks, clipId: U.uid(), startedAt: Date.now(), timer: null, resolve: null };
     recorder.start(1000);
+    if (transcribe === 'on') startLiveTranscription(stream);
     el.recordBtn.classList.add('recording');
     el.recPill.hidden = false;
     rec.timer = setInterval(updateRecPill, 500);
@@ -794,14 +800,20 @@
     el.recordBtn.classList.remove('recording');
     el.recPill.hidden = true;
     const duration = Date.now() - r.startedAt;
+    if (r.liveUnsub) r.liveUnsub();
+    showCaption({ state: 'idle' });
     if (chunks.length && note) {
       const blob = new Blob(chunks, { type: mime || chunks[0].type || 'audio/webm' });
       note.audio = note.audio || [];
-      note.audio.push({ id: r.clipId, blob, mime: blob.type, duration, created: r.startedAt });
+      const clip = { id: r.clipId, blob, mime: blob.type, duration, created: r.startedAt };
+      if (r.live) clip.transcript = r.transcript || [];
+      note.audio.push(clip);
       markDirty();
       app.toast('Recording saved (' + fmtTime(duration) + ')');
       showAudioBar(note.audio.length - 1);
+      if (r.live) finishLive(r, clip, note);
     } else {
+      if (r.live) r.live.stop().catch(() => { });
       app.toast('Nothing was recorded');
     }
     if (r.resolve) r.resolve();
@@ -830,11 +842,14 @@
     bar.querySelector('.ab-prev').disabled = index === 0;
     bar.querySelector('.ab-next').disabled = index >= note.audio.length - 1;
     setPlayIcon(false);
+    updateTranscriptButton();
+    if (el.transcriptPanel && !el.transcriptPanel.hidden) renderTranscript();
   }
 
   function hideAudioBar() {
     stopPlayback();
     if (el.audioBar) el.audioBar.hidden = true;
+    if (el.transcriptPanel) el.transcriptPanel.hidden = true;
   }
 
   function stopPlayback() {
@@ -858,6 +873,7 @@
     el.audioBar.querySelector('.ab-time').textContent = fmtTime(t) + ' / ' + fmtTime(playback.clip.duration);
     renderer.replay = { c: playback.clip.id, t };
     renderAll();
+    highlightTranscript();
   });
 
   function seekToInkAt(w) {
@@ -884,6 +900,14 @@
     bar.querySelector('.ab-prev').addEventListener('click', () => { if (playback) showAudioBar(playback.index - 1); });
     bar.querySelector('.ab-next').addEventListener('click', () => { if (playback) showAudioBar(playback.index + 1); });
     bar.querySelector('.ab-close').addEventListener('click', hideAudioBar);
+    bar.querySelector('.ab-text').addEventListener('click', () => {
+      const p = el.transcriptPanel;
+      p.hidden = !p.hidden;
+      if (!p.hidden) renderTranscript();
+    });
+    el.transcriptPanel.querySelector('.tp-close').addEventListener('click', () => { el.transcriptPanel.hidden = true; });
+    el.transcriptPanel.querySelector('.tp-copy').addEventListener('click', copyTranscript);
+    el.transcriptPanel.querySelector('.tp-transcribe').addEventListener('click', transcribeCurrentClip);
     bar.querySelector('.ab-del').addEventListener('click', async () => {
       if (!playback) return;
       const ok = await app.confirm('Delete this recording?', 'The audio is removed from this note. Your ink stays.');
@@ -893,6 +917,168 @@
       markDirty();
       if (note.audio.length) showAudioBar(Math.min(idx, note.audio.length - 1)); else hideAudioBar();
     });
+  }
+
+  /* =================== speech to text (on device) =================== */
+
+  const transcribing = new Map(); // clip id → {pct}
+
+  // 'ask' shows the one-time offer; the answer is remembered as a setting the user can change.
+  async function decideTranscription(force) {
+    if (!BN.Transcribe || !BN.Transcribe.SUPPORTED) return 'off';
+    let v = S.get('audio.transcribe') || 'ask';
+    if (v === 'on') return 'on';
+    if (v === 'off' && !force) return 'off';
+    const mb = BN.Transcribe.estimateMB();
+    const pick = await app.choose('Transcribe your lectures?',
+      `BetterNotes can turn speech into text as you record, right on this device. It needs a one-time download of a small open speech model (about ${mb} MB). Your audio never leaves this device. You can change this later under Settings → Audio recording.`,
+      [{ label: 'Just record' }, { label: 'Download & transcribe', primary: true }]);
+    if (pick < 0) return 'off'; // dismissed: ask again next time
+    v = pick === 1 ? 'on' : 'off';
+    S.set('audio.transcribe', v);
+    if (v === 'off') app.toast('Recording only. Transcription can be turned on in Settings → Audio recording.');
+    return v;
+  }
+
+  function startLiveTranscription(stream) {
+    if (!rec) return;
+    const r = rec;
+    r.transcript = [];
+    showCaption(BN.Transcribe.isReady() ? { state: 'ready' } : { state: 'loading', pct: 0 });
+    r.liveUnsub = BN.Transcribe.onStatus((st) => { if (rec === r) showCaption(st); });
+    const list = r.transcript;
+    r.live = BN.Transcribe.createLiveSession(stream, {
+      startedAt: r.startedAt,
+      onSegment: (seg) => { list.push(seg); if (rec === r) showCaption({ state: 'text', text: seg.text }); }
+    });
+    r.live.ready.catch((e) => { if (rec === r) showCaption({ state: 'error', message: 'Transcription unavailable: ' + ((e && e.message) || e) }); });
+  }
+
+  function finishLive(r, clip, noteRef) {
+    r.live.stop().then((segs) => {
+      clip.transcript = segs;
+      if (note === noteRef) {
+        markDirty();
+        updateTranscriptButton();
+        if (el.transcriptPanel && !el.transcriptPanel.hidden) renderTranscript();
+      } else if (noteRef) {
+        BN.Store.saveNote(noteRef, null).catch(() => { });
+      }
+    }).catch(() => { });
+  }
+
+  let captionTimer = null;
+  function showCaption(st) {
+    const c = el.liveCaption;
+    if (!c) return;
+    if (st.state === 'idle' || (S.get('audio.liveCaptions') === false && st.state !== 'error')) { c.hidden = true; return; }
+    let text = '';
+    if (st.state === 'loading') text = st.pct ? `Downloading speech model · ${st.pct}%` : (st.note || 'Preparing speech model…');
+    else if (st.state === 'ready') text = 'Listening…';
+    else if (st.state === 'text') text = st.text;
+    else if (st.state === 'error') text = st.message || 'Transcription failed';
+    c.textContent = text;
+    c.classList.toggle('dim', st.state !== 'text');
+    c.hidden = false;
+    clearTimeout(captionTimer);
+    if (st.state === 'error') captionTimer = setTimeout(() => { c.hidden = true; }, 6000);
+  }
+
+  function updateTranscriptButton() {
+    const b = el.audioBar && el.audioBar.querySelector('.ab-text');
+    if (!b) return;
+    b.classList.toggle('has', !!(playback && playback.clip.transcript && playback.clip.transcript.length));
+  }
+
+  function setTranscriptStatus() {
+    const p = el.transcriptPanel;
+    if (!p || !playback) return;
+    const clip = playback.clip;
+    const segs = clip.transcript || [];
+    const status = p.querySelector('.tp-status');
+    const btn = p.querySelector('.tp-transcribe');
+    const job = transcribing.get(clip.id);
+    if (job) { status.textContent = `Transcribing… ${Math.round(job.pct * 100)}%`; btn.hidden = true; }
+    else if (!segs.length) { status.textContent = 'No transcript yet'; btn.hidden = false; }
+    else { status.textContent = `${segs.length} passage${segs.length === 1 ? '' : 's'} · tap one to jump there`; btn.hidden = true; }
+    p.querySelector('.tp-copy').disabled = !segs.length;
+  }
+
+  function renderTranscript() {
+    const p = el.transcriptPanel;
+    if (!p || !playback) return;
+    setTranscriptStatus();
+    const list = p.querySelector('.tp-list');
+    list.innerHTML = '';
+    for (const seg of playback.clip.transcript || []) {
+      const row = document.createElement('button');
+      row.className = 'tr-row';
+      row.dataset.t0 = seg.t0;
+      const t = document.createElement('span');
+      t.className = 'tr-t';
+      t.textContent = fmtTime(seg.t0);
+      const x = document.createElement('span');
+      x.className = 'tr-x';
+      x.textContent = seg.text;
+      row.append(t, x);
+      row.addEventListener('click', () => {
+        if (!playback) return;
+        playback.audio.currentTime = seg.t0 / 1000;
+        onAudioTime();
+        if (playback.audio.paused) playback.audio.play().catch(() => { });
+      });
+      list.appendChild(row);
+    }
+    highlightTranscript();
+  }
+
+  function highlightTranscript() {
+    const p = el.transcriptPanel;
+    if (!p || p.hidden || !playback) return;
+    const t = playback.audio.currentTime * 1000;
+    let cur = null;
+    const rows = p.querySelectorAll('.tr-row');
+    for (const row of rows) if (+row.dataset.t0 <= t) cur = row;
+    for (const row of rows) {
+      row.classList.toggle('current', row === cur);
+      row.classList.toggle('future', +row.dataset.t0 > t);
+    }
+    if (cur && !playback.audio.paused) cur.scrollIntoView({ block: 'nearest' });
+  }
+
+  async function copyTranscript() {
+    if (!playback || !playback.clip.transcript || !playback.clip.transcript.length) return;
+    const text = playback.clip.transcript.map((s) => `[${fmtTime(s.t0)}] ${s.text}`).join('\n');
+    try { await navigator.clipboard.writeText(text); app.toast('Transcript copied'); }
+    catch (e) { app.toast('Could not copy', true); }
+  }
+
+  async function transcribeCurrentClip() {
+    if (!playback || !note) return;
+    const clip = playback.clip;
+    const noteRef = note;
+    if (transcribing.has(clip.id)) return;
+    if ((await decideTranscription(true)) !== 'on') return;
+    const job = { pct: 0 };
+    transcribing.set(clip.id, job);
+    setTranscriptStatus();
+    const unsub = BN.Transcribe.onStatus((st) => {
+      if (st.state === 'loading') { job.pct = ((st.pct || 0) / 100) * 0.15; setTranscriptStatus(); }
+    });
+    try {
+      const segs = await BN.Transcribe.transcribeClip(clip, {
+        onProgress: (f) => { job.pct = 0.15 + 0.85 * f; setTranscriptStatus(); }
+      });
+      clip.transcript = segs;
+      if (note === noteRef) markDirty(); else BN.Store.saveNote(noteRef, null).catch(() => { });
+      app.toast(segs.length ? 'Transcript ready' : 'No speech was found in this recording');
+    } catch (e) {
+      app.toast('Transcription failed: ' + ((e && e.message) || e), true);
+    }
+    unsub();
+    transcribing.delete(clip.id);
+    updateTranscriptButton();
+    if (playback && playback.clip === clip) renderTranscript();
   }
 
   /* =================== image crop =================== */
@@ -1056,7 +1242,8 @@
     closePopover();
     // Let the browser handle taps into text boxes (focus/caret/Scribble).
     if (tool === 'text' && e.target.closest && e.target.closest('.bn-text')) return;
-    if (e.target.closest && (e.target.closest('#selActions') || e.target.closest('#penBar'))) return;
+    if (e.target.closest && e.target.closest('#selActions, #penBar')) return;
+    if (e.target.closest && e.target.closest('#audioBar, #recPill, #liveCaption, #transcriptPanel, #zoomChip')) { commitFocusedText(); return; }
     commitFocusedText();
     e.preventDefault();
     try { el.wrap.setPointerCapture(e.pointerId); } catch (err) { }
@@ -1977,6 +2164,7 @@
 
   function onWheel(e) {
     if (!note) return;
+    if (e.target.closest && e.target.closest('#transcriptPanel')) return; // let the list scroll
     e.preventDefault();
     const t = renderer.t;
     if (e.ctrlKey || e.metaKey) {
@@ -2394,7 +2582,7 @@
   Editor.thumbnailFor = (n) => (renderer ? renderer.thumbnail(n) : Promise.resolve(null));
 
   // Introspection for tests/console; not used by the app itself.
-  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t, recording: !!rec, playback: playback ? { index: playback.index, paused: playback.audio.paused } : null, replay: renderer && renderer.replay });
+  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t, recording: !!rec, playback: playback ? { index: playback.index, paused: playback.audio.paused, time: playback.audio.currentTime } : null, replay: renderer && renderer.replay, liveSegments: rec && rec.transcript ? rec.transcript.length : 0, caption: el.liveCaption && !el.liveCaption.hidden ? el.liveCaption.textContent : null, transcribing: transcribing.size });
 
   window.BN = window.BN || {};
   window.BN.Editor = Editor;

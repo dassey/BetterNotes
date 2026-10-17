@@ -117,6 +117,31 @@
       options: [['48000', 'Compact (48 kbps)'], ['64000', 'Balanced (64 kbps)'], ['128000', 'High (128 kbps)']],
       desc: 'Recordings are stored inside the note on this device. Balanced is about 0.5 MB per minute.'
     },
+    {
+      key: 'audio.transcribe', label: 'Transcribe speech to text', type: 'select', def: 'ask',
+      options: [['ask', 'Ask when I tap record'], ['on', 'On'], ['off', 'Off']],
+      desc: 'Turns what is said into searchable, tappable text while you record — entirely on this device. The first use downloads a small open speech model; your audio is never uploaded.'
+    },
+    {
+      key: 'audio.model', label: 'Speech model', type: 'select', def: 'moonshine-tiny',
+      options: [['moonshine-tiny', 'English · fastest (≈ 35 MB)'], ['moonshine-base', 'English · more accurate (≈ 70 MB)'], ['whisper-base', 'All languages (≈ 85 MB)']],
+      desc: 'Plus a one-time 20 MB runtime shared by all models. Devices with GPU acceleration fetch a larger, faster variant. Changing this downloads the new model on next use.'
+    },
+    {
+      key: 'audio.language', label: 'Spoken language', type: 'select', def: 'auto',
+      options: [['auto', 'Detect automatically'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'], ['nl', 'Dutch'], ['pl', 'Polish'], ['tr', 'Turkish'], ['ru', 'Russian'], ['ar', 'Arabic'], ['hi', 'Hindi'], ['zh', 'Chinese'], ['ja', 'Japanese'], ['ko', 'Korean']],
+      desc: 'Used by the “All languages” model only; the English models ignore it.'
+    },
+    {
+      key: 'audio.liveCaptions', label: 'Live captions while recording', type: 'toggle', def: true,
+      desc: 'Shows what was just said in a strip at the bottom of the page. Transcription still runs when this is off.'
+    },
+    {
+      key: 'audio.compute', label: 'Speech processing', type: 'select', def: 'auto',
+      options: [['auto', 'Automatic (GPU when available)'], ['cpu', 'CPU only']],
+      desc: 'Switch to CPU only if transcription misbehaves on this device.'
+    },
+    { action: 'removeModels', label: 'Delete downloaded speech model…', desc: 'Frees the storage used by the speech model and its runtime. They download again the next time transcription is used.' },
     { info: 'Ink written while recording is time-stamped: during playback it dims until its moment, and tapping it with the hand tool jumps the audio there.' },
 
     { section: 'Appearance' },

@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.9.0';
+  BN.VERSION = '0.10.0';
 
   let toastTimer = null;
 
@@ -75,7 +75,7 @@
     note.items.push(
       mk(48, 'Welcome to BetterNotes ✍️', 30, '#4f7cff'),
       mk(112, 'Everything stays on this device — no accounts, nothing uploaded, works offline.', 18),
-      mk(176, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink, then move, resize, recolor or Tidy it\n• Add text boxes (write into them with the Pencil — Scribble types it for you)\n• Insert photos — move, resize and crop them\n• Precise eraser splits strokes — or switch it to whole-stroke\n• Record a lecture — ink you write syncs to the audio; tap a word later to replay that moment\n• Pinch to zoom · two-finger tap undo · three-finger tap redo', 17),
+      mk(176, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink, then move, resize, recolor or Tidy it\n• Add text boxes (write into them with the Pencil — Scribble types it for you)\n• Insert photos — move, resize and crop them\n• Precise eraser splits strokes — or switch it to whole-stroke\n• Record a lecture — ink syncs to the audio; tap a word to replay that moment. Optional on-device speech-to-text\n• Pinch to zoom · two-finger tap undo · three-finger tap redo', 17),
       mk(430, 'Open ⚙ Settings to tune everything: palm rejection, pressure, smoothing, paper, themes and backups.', 17),
       mk(500, 'Tip: tap the active pen tool again to pick colors and sizes.', 17, '#4f7cff')
     );
@@ -148,6 +148,12 @@
       App.toast(ok ? 'Storage is protected' : 'Browser did not grant persistent storage');
       BN.Settings.refreshUsage();
     };
+    BN.Settings.actions.removeModels = async function () {
+      if (!BN.Transcribe) return;
+      const bytes = await BN.Transcribe.deleteModels();
+      App.toast(bytes ? `Speech model removed (${Math.round(bytes / 1e6)} MB freed)` : 'No speech model was downloaded');
+      BN.Settings.refreshUsage();
+    };
     BN.Settings.actions.wipe = async function () {
       const ok = await App.confirm('Erase all data?', 'Every note on this device will be deleted. This cannot be undone.');
       if (!ok) return;
@@ -194,6 +200,24 @@
       const overlay = buildDialog(title, msg, row);
       no.addEventListener('click', () => { overlay.remove(); resolve(false); });
       yes.addEventListener('click', () => { overlay.remove(); resolve(true); });
+    });
+  };
+
+  // Multi-choice dialog. Resolves with the index of the tapped option, or -1 when dismissed.
+  App.choose = function (title, msg, options) {
+    return new Promise((resolve) => {
+      const row = document.createElement('div');
+      row.className = 'dialog-row';
+      let overlay = null;
+      options.forEach((o, i) => {
+        const b = document.createElement('button');
+        b.className = 'btn' + (o.primary ? ' btn-primary' : '') + (o.danger ? ' btn-danger' : '');
+        b.textContent = o.label;
+        b.addEventListener('click', () => { overlay.remove(); resolve(i); });
+        row.appendChild(b);
+      });
+      overlay = buildDialog(title, msg, row);
+      overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) { overlay.remove(); resolve(-1); } });
     });
   };
 

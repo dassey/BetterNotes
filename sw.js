@@ -2,7 +2,8 @@
    offline; cache-first for app files, no runtime requests to anywhere else. */
 'use strict';
 
-const VERSION = 'bn-v0.9.0';
+const VERSION = 'bn-v0.10.0';
+const VENDOR = 'bn-vendor-v1'; // speech runtime from the CDN: versioned, immutable, kept across app updates
 const ASSETS = [
   './',
   './index.html',
@@ -13,6 +14,9 @@ const ASSETS = [
   './js/settings.js',
   './js/canvas.js',
   './js/pdf.js',
+  './js/transcribe.js',
+  './js/transcribe-worker.js',
+  './js/capture-worklet.js',
   './js/editor.js',
   './js/home.js',
   './js/app.js',
@@ -32,7 +36,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION && k.startsWith('bn-v') && !k.startsWith('bn-vendor')).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -41,7 +45,17 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return;
+  if (url.origin !== location.origin) {
+    if (url.hostname === 'cdn.jsdelivr.net') {
+      e.respondWith(
+        caches.open(VENDOR).then((c) => c.match(req).then((r) => r || fetch(req).then((res) => {
+          if (res && res.ok) c.put(req, res.clone());
+          return res;
+        })))
+      );
+    }
+    return;
+  }
 
   if (req.mode === 'navigate') {
     e.respondWith(

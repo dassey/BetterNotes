@@ -154,6 +154,26 @@
     return out + `${num(e.x)} ${num(e.y)} l\n`;
   }
 
+  function fmtClock(ms) {
+    const t = Math.max(0, Math.floor(ms / 1000));
+    return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
+  }
+
+  // Wraps a plain string to a width in points (Helvetica metrics ≈ Arial's).
+  function wrapPlain(text, width, size) {
+    const c = document.createElement('canvas').getContext('2d');
+    c.font = `${size}px Helvetica, Arial, sans-serif`;
+    const lines = [];
+    let cur = '';
+    for (const w of String(text).split(/(\s+)/)) {
+      const test = cur + w;
+      if (cur && c.measureText(test).width > width) { lines.push(cur); cur = w.trimStart(); }
+      else cur = test;
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
   function rectsIntersect(a, b) {
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
@@ -267,7 +287,7 @@
     const taper = !BN.Settings || BN.Settings.get('input.taper') !== false;
     const hiBlend = paperLum > 0.5 ? 'Multiply' : 'Lighten';
 
-    const objs = [null, null, null, null]; // 1 catalog, 2 pages, 3+4 fonts — filled at the end
+    const objs = [null, null, null, null, null]; // 1 catalog, 2 pages, 3–5 fonts — filled at the end
     const add = (parts) => { objs.push(parts); return objs.length; };
     const gsObjs = new Map(); // opacity → object number
     const gsFor = (alpha) => {
@@ -329,16 +349,46 @@
       const streamObj = packed
         ? add([`<< /Length ${packed.length} /Filter /FlateDecode >>\nstream\n`, packed, '\nendstream'])
         : add([`<< /Length ${content.length} >>\nstream\n`, content, '\nendstream']);
-      const res = `/Font << /F1 3 0 R /F2 4 0 R >>` +
+      const res = `/Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >>` +
         (gsUsed.size ? ` /ExtGState << ${[...gsUsed].map((n) => `/GS${n} ${n} 0 R`).join(' ')} >>` : '') +
         (xobjects.length ? ` /XObject << ${xobjects.map((n) => `/Im${n} ${n} 0 R`).join(' ')} >>` : '');
       pageObjNums.push(add([`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(A4.w)} ${num(A4.h)}] /Resources << ${res} >> /Contents ${streamObj} 0 R >>`]));
+    }
+
+    // Transcript pages: every recording that has one, as time-stamped passages.
+    const clips = (note.audio || []).filter((c) => Array.isArray(c.transcript) && c.transcript.length);
+    if (clips.length) {
+      const margin = 48, fs = 10.5, lineH = 14.5, width = A4.w - margin * 2;
+      const lines = [];
+      clips.forEach((c, i) => {
+        if (i) lines.push({ text: '' });
+        lines.push({ text: `Transcript — Recording ${i + 1}` + (c.duration ? ` (${fmtClock(c.duration)})` : ''), bold: true });
+        for (const seg of c.transcript) for (const ln of wrapPlain(`[${fmtClock(seg.t0)}]  ${seg.text}`, width, fs)) lines.push({ text: ln });
+      });
+      const perPage = Math.floor((A4.h - margin * 2) / lineH);
+      for (let i = 0; i < lines.length; i += perPage) {
+        let content = `BT ${hexRGB('#1d1d2e')} rg\n`;
+        lines.slice(i, i + perPage).forEach((ln, j) => {
+          const runs = textRuns(ln.text);
+          if (!runs.length) return;
+          content += `1 0 0 1 ${num(margin)} ${num(A4.h - margin - (j + 1) * lineH)} Tm`;
+          for (const r of runs) content += ` /${ln.bold ? 'F3' : r.f} ${num(ln.bold ? 13 : fs)} Tf ${r.s} Tj`;
+          content += '\n';
+        });
+        content += 'ET\n';
+        const packed = await deflate(content);
+        const streamObj = packed
+          ? add([`<< /Length ${packed.length} /Filter /FlateDecode >>\nstream\n`, packed, '\nendstream'])
+          : add([`<< /Length ${content.length} >>\nstream\n`, content, '\nendstream']);
+        pageObjNums.push(add([`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${num(A4.w)} ${num(A4.h)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents ${streamObj} 0 R >>`]));
+      }
     }
 
     objs[0] = ['<< /Type /Catalog /Pages 2 0 R >>'];
     objs[1] = [`<< /Type /Pages /Kids [${pageObjNums.map((n) => `${n} 0 R`).join(' ')}] /Count ${pageObjNums.length} >>`];
     objs[2] = ['<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'];
     objs[3] = ['<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>'];
+    objs[4] = ['<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'];
     const infoObj = add([`<< /Title ${pdfString(note.title || 'Note')} /Producer (BetterNotes) >>`]);
 
     // Serialize with a byte-accurate cross-reference table.
@@ -361,7 +411,7 @@
     write(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`);
     for (const o of offsets) write(String(o).padStart(10, '0') + ' 00000 n \n');
     write(`trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info ${infoObj} 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
-    return { blob: new Blob(chunks, { type: 'application/pdf' }), pages: pageCount };
+    return { blob: new Blob(chunks, { type: 'application/pdf' }), pages: pageObjNums.length };
   };
 
   window.BN = window.BN || {};
