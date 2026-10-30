@@ -2,7 +2,7 @@
    offline; cache-first for app files, no runtime requests to anywhere else. */
 'use strict';
 
-const VERSION = 'bn-v0.11.0';
+const VERSION = 'bn-v0.12.0';
 const VENDOR = 'bn-vendor-v1'; // speech runtime from the CDN: versioned, immutable, kept across app updates
 const ASSETS = [
   './',
@@ -10,6 +10,7 @@ const ASSETS = [
   './css/app.css',
   './js/util.js',
   './js/ink.js',
+  './js/recall.js',
   './js/store.js',
   './js/settings.js',
   './js/canvas.js',

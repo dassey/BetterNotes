@@ -33,7 +33,8 @@
       search: document.getElementById('home-search'),
       newBtn: document.getElementById('home-new'),
       fab: document.getElementById('home-fab'),
-      folders: document.getElementById('home-folders')
+      folders: document.getElementById('home-folders'),
+      review: document.getElementById('home-review')
     };
     try { folder = localStorage.getItem(FOLDER_SEL_KEY) || ''; } catch (e) { folder = ''; }
     el.newBtn.addEventListener('click', () => app.createNote());
@@ -130,9 +131,41 @@
     renderFolders();
     let list = folder ? metas.filter((m) => m.folder === folder) : metas;
     list = query ? list.filter((m) => (m.title || '').toLowerCase().includes(query) || (m.words || '').includes(query)) : list;
+    renderReview(query ? [] : (folder ? metas.filter((m) => m.folder === folder) : metas));
     el.grid.innerHTML = '';
     el.empty.hidden = list.length > 0;
     for (const m of list) el.grid.appendChild(card(m));
+  }
+
+  // Recall: cards whose review day has come, gathered across notes (or the open folder).
+  function renderReview(list) {
+    const now = Date.now();
+    const due = [];
+    let total = 0, nextAt = Infinity;
+    for (const m of list) {
+      const n = BN.Recall.dueCount(m, now);
+      if (n) { due.push({ id: m.id, n, first: Math.min(...m.dueAt) }); total += n; }
+      for (const t of m.dueAt || []) if (t > now && t < nextAt) nextAt = t;
+    }
+    const box = el.review;
+    box.innerHTML = '';
+    box.className = '';
+    if (!total && nextAt === Infinity) { box.hidden = true; return; }
+    box.hidden = false;
+    const icon = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M7.5 9h9"/><rect x="7" y="12.4" width="10" height="3.6" rx="1" fill="currentColor" stroke="none"/></svg>';
+    if (!total) {
+      box.className = 'calm';
+      box.innerHTML = icon + '<span></span>';
+      box.querySelector('span').textContent = 'All caught up — next review ' + BN.Recall.when(nextAt, now);
+      return;
+    }
+    due.sort((a, b) => a.first - b.first);
+    const mins = Math.max(1, Math.round((total * 8) / 60));
+    box.innerHTML = icon + '<div class="rv-text"><strong></strong><span></span></div><button class="btn btn-primary">Review</button>';
+    box.querySelector('strong').textContent = total + (total === 1 ? ' card to review' : ' cards to review');
+    box.querySelector('.rv-text span').textContent = 'from ' + due.length + (due.length === 1 ? ' note' : ' notes') + ' · about ' + mins + ' min';
+    const start = () => app.startReview(due.map((d) => d.id));
+    box.querySelector('button').addEventListener('click', start);
   }
 
   function card(m) {
@@ -151,6 +184,15 @@
       thumb.appendChild(img);
     } else {
       thumb.classList.add('blank');
+    }
+    const dueN = BN.Recall.dueCount(m);
+    if (dueN) {
+      const badge = document.createElement('button');
+      badge.className = 'note-due';
+      badge.textContent = dueN + ' due';
+      badge.setAttribute('aria-label', `Review ${dueN} due card${dueN === 1 ? '' : 's'}`);
+      badge.addEventListener('click', (e) => { e.stopPropagation(); app.startReview([m.id]); });
+      thumb.appendChild(badge);
     }
     div.appendChild(thumb);
 

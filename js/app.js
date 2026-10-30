@@ -3,7 +3,7 @@
   'use strict';
   const U = BN.util;
   const App = {};
-  BN.VERSION = '0.11.0';
+  BN.VERSION = '0.12.0';
 
   let toastTimer = null;
 
@@ -32,20 +32,39 @@
 
   async function route() {
     const h = location.hash || '#/';
-    const m = h.match(/^#\/note\/(.+)$/);
+    const m = h.match(/^#\/note\/([^/]+)(\/recall)?$/);
     if (m) {
       const note = await BN.Store.getNote(m[1]);
       if (!note) { location.hash = '#/'; return; }
       BN.Home.hide();
-      BN.Editor.open(note);
+      await BN.Editor.close(); // note → note (review session): save the one being left
+      BN.Editor.open(note, { recall: !!m[2] });
+      // Opening in Recall is one-off: a reload or Back lands on the plain note.
+      if (m[2]) history.replaceState(null, '', '#/note/' + m[1]);
     } else {
+      review = null;
       await BN.Editor.close();
       await BN.Home.show();
     }
   }
 
-  App.openNote = (id) => { location.hash = '#/note/' + id; };
+  App.openNote = (id, opts) => { location.hash = '#/note/' + id + (opts && opts.recall ? '/recall' : ''); };
   App.showHome = () => { location.hash = '#/'; };
+
+  /* ---------------- review sessions (Recall) ---------------- */
+
+  let review = null; // note ids with due cards, in the order they are studied
+
+  App.startReview = function (ids) {
+    if (!ids.length) return;
+    review = ids.slice();
+    App.openNote(review[0], { recall: true });
+  };
+  App.nextReviewNote = function (currentId) {
+    if (!review) return null;
+    const i = review.indexOf(currentId);
+    return i >= 0 && i + 1 < review.length ? review[i + 1] : null;
+  };
 
   App.createNote = async function () {
     const note = BN.Store.newNote({
@@ -72,13 +91,31 @@
     const mk = (y, text, size, color) => ({
       id: U.uid(), type: 'text', x: 56, y, w: 690, h: size * 1.5, size, color: color || '#1d1d2e', text
     });
+    const demo = 'The powerhouse of the cell is the ';
+    const answer = 'mitochondria';
     note.items.push(
       mk(48, 'Welcome to BetterNotes ✍️', 30, '#4f7cff'),
       mk(112, 'Everything stays on this device — no accounts, nothing uploaded, works offline.', 18),
-      mk(176, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink, then move, resize, recolor or Tidy it\n• Add text boxes (write into them with the Pencil — Scribble types it for you)\n• Insert photos — move, resize and crop them\n• Precise eraser splits strokes — or switch it to whole-stroke\n• Record a lecture — ink syncs to the audio; tap a word to replay that moment. Optional on-device speech-to-text\n• Pinch to zoom · two-finger tap undo · three-finger tap redo', 17),
-      mk(430, 'Open ⚙ Settings to tune everything: palm rejection, pressure, smoothing, paper, themes and backups.', 17),
-      mk(500, 'Tip: tap the active pen tool again to pick colors and sizes.', 17, '#4f7cff')
+      mk(168, '• Pen & highlighter with Apple Pencil pressure\n• Hold the pen still after drawing a shape to snap it perfect\n• Lasso-select ink to move, resize, recolor or Tidy it\n• Text boxes — write into them with the Pencil and Scribble types it\n• Photos you can move, resize and crop\n• Record a lecture: ink syncs to the audio, with on-device captions\n• Pinch to zoom · two-finger tap undo · three-finger tap redo', 17),
+      mk(372, 'Try Recall — your highlights become flashcards', 20, '#4f7cff'),
+      mk(414, demo + answer + '.', 18),
+      mk(452, 'Tap the card button in the toolbar, then tap the yellow tape to check yourself.', 16, '#70707c'),
+      mk(520, 'Open ⚙ Settings to tune palm rejection, pressure, paper, themes and backups.', 17),
+      mk(572, 'Tip: tap the active pen tool again to pick colors and sizes.', 17, '#4f7cff')
     );
+    // A real highlighter stroke over the answer, so Recall has a card to show on day one.
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;white-space:pre;font-size:18px';
+    document.body.appendChild(probe);
+    const widthOf = (txt) => { probe.textContent = txt; return probe.getBoundingClientRect().width; };
+    const cap = 22 / 2 - 2; // the round pen tip reaches past the stroke's end points
+    const x0 = 56 + widthOf(demo) + cap;
+    const x1 = 56 + widthOf(demo + answer) - cap;
+    probe.remove();
+    const ym = 414 + 18 * 1.35 / 2;
+    const pts = [];
+    for (let i = 0; i <= 8; i++) pts.push({ x: x0 + ((x1 - x0) * i) / 8, y: ym + Math.sin(i * 0.9) * 0.6, p: 0.5 });
+    note.items.push({ id: U.uid(), type: 'stroke', tool: 'high', color: '#ffd60a', size: 22, pressure: 0, opacity: 0.35, points: pts });
     let thumb = null;
     try { thumb = await BN.Editor.thumbnailFor(note); } catch (e) { thumb = null; }
     await BN.Store.saveNote(note, thumb);

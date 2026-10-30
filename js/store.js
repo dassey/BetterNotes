@@ -53,12 +53,14 @@
 
   Store.saveNote = async function (note, thumbDataURL) {
     note.modified = Date.now();
+    BN.Recall.prune(note);
     const clone = U.deepClone(note);
     await reqP(tx('notes', 'readwrite').put(clone));
+    const recall = BN.Recall.summary(note);
     const meta = {
       id: note.id, title: note.title, created: note.created, modified: note.modified,
       folder: note.folder || '', items: note.items.length, thumb: thumbDataURL || (await Store.getMeta(note.id))?.thumb || null,
-      words: searchWords(note)
+      words: searchWords(note), cards: recall.cards, dueAt: recall.dueAt
     };
     await reqP(tx('meta', 'readwrite').put(meta));
     return meta;
@@ -91,7 +93,13 @@
     copy.id = U.uid();
     copy.title = note.title + ' copy';
     copy.created = copy.modified = Date.now();
-    for (const it of copy.items) it.id = U.uid();
+    const ids = new Map();
+    for (const it of copy.items) { const nid = U.uid(); ids.set(it.id, nid); it.id = nid; }
+    if (copy.recall) {
+      const moved = {};
+      for (const k of Object.keys(copy.recall)) if (ids.has(k)) moved[ids.get(k)] = copy.recall[k];
+      copy.recall = moved;
+    }
     const meta = await Store.getMeta(id);
     await Store.saveNote(copy, meta?.thumb || null);
     return copy.id;

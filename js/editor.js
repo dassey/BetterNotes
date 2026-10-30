@@ -27,6 +27,7 @@
   let rec = null;               // active audio recording session
   let playback = null;          // active recording playback {clip, index, audio, url}
   let contentBB = null;         // cached union bbox of all items
+  let recall = null;            // active Recall study session (highlights hidden as cards)
 
   const isInfinite = () => !!note && (note.paper.layout || 'page') === 'infinite';
   let el = {};                  // dom refs
@@ -57,8 +58,13 @@
       recPill: document.getElementById('recPill'),
       audioBar: document.getElementById('audioBar'),
       liveCaption: document.getElementById('liveCaption'),
-      transcriptPanel: document.getElementById('transcriptPanel')
+      transcriptPanel: document.getElementById('transcriptPanel'),
+      recallBtn: document.getElementById('ed-recall'),
+      recallLayer: document.getElementById('recallLayer'),
+      recallBar: document.getElementById('recallBar'),
+      gradeBar: document.getElementById('gradeBar')
     };
+    bindRecall();
     bindAudioBar();
     el.zoomChip.addEventListener('click', fitContent);
     renderer = new BN.Renderer(el.wrap, el.inkC, el.liveC);
@@ -82,7 +88,8 @@
     if (prev) prev.cancel();
   }
 
-  Editor.open = function (noteObj) {
+  Editor.open = function (noteObj, opts) {
+    exitRecall();
     note = noteObj;
     undoStack = []; redoStack = [];
     selection = null; action = null;
@@ -110,12 +117,14 @@
       }
     } catch (e) { /* ignore */ }
     updateUndoButtons();
+    if (opts && opts.recall) enterRecall();
   };
 
   Editor.close = async function () {
     if (!note) return;
     closePopover();
     cancelCrop();
+    exitRecall();
     await stopRecording();
     hideAudioBar();
     commitFocusedText();
@@ -240,11 +249,17 @@
     }
     updateTextLayerTransform();
     positionSelActions();
+    positionGradeBar();
   }
 
   function updateTextLayerTransform() {
     const t = renderer.t;
-    el.textLayer.style.transform = `translate(${t.x}px, ${t.y}px) scale(${t.s})`;
+    const tf = `translate(${t.x}px, ${t.y}px) scale(${t.s})`;
+    el.textLayer.style.transform = tf;
+    if (recall) {
+      el.recallLayer.style.transform = tf;
+      el.recallLayer.style.setProperty('--z', String(1 / t.s));
+    }
   }
 
 
@@ -286,6 +301,7 @@
     }
     updateSelectionBBox();
     rebuildTextLayer();
+    if (recall) refreshRecall();
     renderAll();
     updateUndoButtons();
     markDirty();
@@ -1273,8 +1289,8 @@
   function onDown(e) {
     closePopover();
     // Let the browser handle taps into text boxes (focus/caret/Scribble).
-    if (tool === 'text' && e.target.closest && e.target.closest('.bn-text')) return;
-    if (e.target.closest && e.target.closest('#selActions, #penBar')) return;
+    if (!recall && tool === 'text' && e.target.closest && e.target.closest('.bn-text')) return;
+    if (e.target.closest && e.target.closest('#selActions, #penBar, #recallBar, #gradeBar')) return;
     if (e.target.closest && e.target.closest('#audioBar, #recPill, #liveCaption, #transcriptPanel, #zoomChip')) { commitFocusedText(); return; }
     commitFocusedText();
     e.preventDefault();
@@ -1355,6 +1371,7 @@
   function startToolAction(e, s) {
     const w = renderer.worldFromScreen(s.x, s.y);
     if (e.pointerType === 'mouse' && (e.button === 1 || spaceHeld)) { startPan(); return; }
+    if (recall) { startPan(); return; } // studying: every touch pans; a tap flips a card
     switch (tool) {
       case 'pen':
       case 'high':
@@ -1681,6 +1698,7 @@
     renderer.renderLive(cropState ? drawCropOverlay : drawOverlays);
     updateTextLayerTransform();
     positionSelActions();
+    positionGradeBar();
     sharpRender();
   });
 
@@ -1918,7 +1936,11 @@
         action = null;
         note.view = { ...renderer.t };
         sharpRender();
-        if (playback && U.dist(p.sx, p.sy, p.x, p.y) < 6) seekToInkAt(renderer.worldFromScreen(p.sx, p.sy));
+        if (recall) {
+          if (U.dist(p.sx, p.sy, p.x, p.y) < 8) recallTap(renderer.worldFromScreen(p.x, p.y));
+        } else if (playback && U.dist(p.sx, p.sy, p.x, p.y) < 6) {
+          seekToInkAt(renderer.worldFromScreen(p.sx, p.sy));
+        }
         break;
       case 'pinch':
         if (touchPointers().length < 2) {
@@ -2190,6 +2212,225 @@
     if (snapped) action.snapped = snapped;
   }
 
+  /* =================== recall (study your highlights) =================== */
+
+  // Every highlighter mark becomes a card that hides what it covers. Tap a card to
+  // check yourself, then say whether you knew it; BN.Recall schedules the next review.
+
+  function bindRecall() {
+    el.recallBtn.addEventListener('click', () => (recall ? exitRecall() : enterRecall()));
+    el.recallBar.querySelector('.rb-done').addEventListener('click', exitRecall);
+    el.recallBar.querySelector('.rb-toggle').addEventListener('click', () => {
+      if (!recall) return;
+      if (recall.open.size < recall.cards.length) for (const c of recall.cards) recall.open.add(c.id);
+      else recall.open.clear();
+      recall.focus = null;
+      syncRecall();
+    });
+    el.recallBar.querySelector('.rb-next').addEventListener('click', () => {
+      const next = app.nextReviewNote && note ? app.nextReviewNote(note.id) : null;
+      if (next) app.openNote(next, { recall: true });
+    });
+    el.gradeBar.querySelector('.gb-forgot').addEventListener('click', () => gradeFocused(false));
+    el.gradeBar.querySelector('.gb-knew').addEventListener('click', () => gradeFocused(true));
+  }
+
+  function enterRecall() {
+    if (!note || recall) return;
+    const cards = BN.Recall.cards(note);
+    if (!cards.length) {
+      setTool('high');
+      app.toast('Highlight what you want to remember — each highlight becomes a card');
+      return;
+    }
+    closePopover();
+    cancelCrop();
+    commitFocusedText();
+    setSelection(null);
+    recall = { cards, open: new Set(), graded: new Map(), before: new Map(), focus: null };
+    el.screen.classList.add('recalling');
+    el.recallBtn.classList.add('active');
+    el.recallBtn.setAttribute('aria-pressed', 'true');
+    renderPenBar();
+    buildRecallLayer();
+    renderAll();
+    const first = cards.find((c) => c.due) || cards.find((c) => c.isNew);
+    if (first) ensureCardVisible(first);
+  }
+  Editor.enterRecall = enterRecall;
+
+  function exitRecall() {
+    if (!recall) return;
+    recall = null;
+    el.screen.classList.remove('recalling');
+    el.recallBtn.classList.remove('active');
+    el.recallBtn.setAttribute('aria-pressed', 'false');
+    el.recallLayer.innerHTML = '';
+    el.recallLayer.hidden = true;
+    el.recallBar.hidden = true;
+    el.gradeBar.hidden = true;
+    renderPenBar();
+  }
+
+  // Content changed underneath (undo/redo): re-derive cards, keep what was revealed.
+  function refreshRecall() {
+    const cards = BN.Recall.cards(note);
+    if (!cards.length) { exitRecall(); return; }
+    const live = new Set(cards.map((c) => c.id));
+    for (const id of [...recall.open]) if (!live.has(id)) recall.open.delete(id);
+    if (recall.focus && !live.has(recall.focus)) recall.focus = null;
+    recall.cards = cards;
+    buildRecallLayer();
+  }
+
+  function buildRecallLayer() {
+    const layer = el.recallLayer;
+    layer.innerHTML = '';
+    layer.hidden = false;
+    layer.style.setProperty('--paper', note.paper.color || '#ffffff');
+    for (const c of recall.cards) {
+      const d = document.createElement('div');
+      d.className = 'rc-card';
+      d.dataset.id = c.id;
+      d.style.left = c.x + 'px';
+      d.style.top = c.y + 'px';
+      d.style.width = c.w + 'px';
+      d.style.height = c.h + 'px';
+      d.style.setProperty('--c', c.color || '#ffd60a');
+      layer.appendChild(d);
+    }
+    updateTextLayerTransform();
+    syncRecall();
+  }
+
+  function syncRecall() {
+    if (!recall) return;
+    for (const d of el.recallLayer.children) {
+      const id = d.dataset.id;
+      const c = recall.cards.find((k) => k.id === id);
+      const g = recall.graded.get(id);
+      d.classList.toggle('open', recall.open.has(id));
+      d.classList.toggle('due', !!(c && c.due) && g === undefined);
+      d.classList.toggle('knew', g === true);
+      d.classList.toggle('forgot', g === false);
+      d.classList.toggle('focus', recall.focus === id);
+    }
+    renderRecallBar();
+    if (recall.focus) {
+      const base = recall.before.has(recall.focus) ? recall.before.get(recall.focus) : (note.recall && note.recall[recall.focus]) || null;
+      el.gradeBar.querySelector('.gb-forgot small').textContent = BN.Recall.hint(base, false);
+      el.gradeBar.querySelector('.gb-knew small').textContent = BN.Recall.hint(base, true);
+    }
+    positionGradeBar();
+  }
+
+  function renderRecallBar() {
+    const total = recall.cards.length;
+    let due = 0, fresh = 0;
+    for (const c of recall.cards) {
+      if (recall.graded.has(c.id)) continue;
+      if (c.due) due++; else if (c.isNew) fresh++;
+    }
+    let text = total + (total === 1 ? ' card' : ' cards');
+    if (due) text += ' · ' + due + ' due';
+    if (fresh) text += ' · ' + fresh + ' new';
+    if (!due && !fresh && recall.graded.size) text += ' · all reviewed';
+    el.recallBar.querySelector('.rb-count').textContent = text;
+    el.recallBar.querySelector('.rb-toggle').textContent = recall.open.size < total ? 'Show all' : 'Hide all';
+    const next = app.nextReviewNote ? app.nextReviewNote(note.id) : null;
+    const nextBtn = el.recallBar.querySelector('.rb-next');
+    nextBtn.hidden = !next;
+    nextBtn.classList.toggle('ready', !!next && !due);
+    el.recallBar.querySelector('.rb-done').classList.toggle('ready', !next && !due && !fresh && recall.graded.size > 0);
+    el.recallBar.hidden = false;
+  }
+
+  function cardAt(w) {
+    const tol = 6 / renderer.t.s;
+    for (let i = recall.cards.length - 1; i >= 0; i--) {
+      const c = recall.cards[i];
+      if (w.x >= c.x - tol && w.x <= c.x + c.w + tol && w.y >= c.y - tol && w.y <= c.y + c.h + tol) return c;
+    }
+    return null;
+  }
+
+  function recallTap(w) {
+    const c = cardAt(w);
+    if (!c) {
+      if (recall.focus) { recall.focus = null; syncRecall(); }
+      return;
+    }
+    if (recall.open.has(c.id)) {
+      recall.open.delete(c.id);
+      if (recall.focus === c.id) recall.focus = null;
+    } else {
+      recall.open.add(c.id);
+      recall.focus = c.id;
+    }
+    syncRecall();
+  }
+
+  // Keyboard: reveal the next hidden card in reading order and bring it into view.
+  function revealNext() {
+    const c = recall.cards.find((k) => !recall.open.has(k.id));
+    if (!c) { app.toast('Every card is showing — tap one to hide it again'); return; }
+    recall.open.add(c.id);
+    recall.focus = c.id;
+    ensureCardVisible(c);
+    syncRecall();
+  }
+
+  function ensureCardVisible(c) {
+    const a = renderer.screenFromWorld(c.x, c.y);
+    const b = renderer.screenFromWorld(c.x + c.w, c.y + c.h);
+    const top = 64, bottom = renderer.h - 110;
+    if (a.x >= 8 && b.x <= renderer.w - 8 && a.y >= top && b.y <= bottom) return;
+    const t = renderer.t;
+    if (a.x < 8 || b.x > renderer.w - 8) t.x += renderer.w / 2 - (a.x + b.x) / 2;
+    if (a.y < top || b.y > bottom) t.y += renderer.h * 0.4 - (a.y + b.y) / 2;
+    clampT(t);
+    note.view = { ...t };
+    renderAll();
+  }
+
+  function gradeFocused(knew) {
+    const id = recall && recall.focus;
+    if (!id) return;
+    // Changing an answer within a session re-grades from the original schedule.
+    if (recall.before.has(id)) {
+      const b = recall.before.get(id);
+      note.recall = note.recall || {};
+      if (b) note.recall[id] = { ...b }; else delete note.recall[id];
+    } else {
+      recall.before.set(id, note.recall && note.recall[id] ? { ...note.recall[id] } : null);
+    }
+    BN.Recall.grade(note, id, knew);
+    recall.graded.set(id, knew);
+    recall.focus = null;
+    autosave();
+    syncRecall();
+    const left = recall.cards.some((c) => !recall.graded.has(c.id) && (c.due || c.isNew));
+    if (!left) {
+      const next = app.nextReviewNote ? app.nextReviewNote(note.id) : null;
+      const soonest = Math.min(...recall.cards.map((c) => (note.recall && note.recall[c.id] ? note.recall[c.id].due : Infinity)));
+      app.toast(next ? 'Note reviewed — tap Next note to keep going' : 'All reviewed — next review ' + BN.Recall.when(soonest));
+    }
+  }
+
+  function positionGradeBar() {
+    if (!el.gradeBar) return;
+    const c = recall && recall.focus ? recall.cards.find((k) => k.id === recall.focus) : null;
+    if (!c) { el.gradeBar.hidden = true; return; }
+    el.gradeBar.hidden = false;
+    const bw = el.gradeBar.offsetWidth || 220, bh = el.gradeBar.offsetHeight || 54;
+    const below = renderer.screenFromWorld(c.x + c.w / 2, c.y + c.h);
+    const above = renderer.screenFromWorld(c.x + c.w / 2, c.y);
+    let y = below.y + 10;
+    if (y + bh > renderer.h - 8) y = above.y - bh - 10;
+    el.gradeBar.style.left = U.clamp(below.x - bw / 2, 8, renderer.w - bw - 8) + 'px';
+    el.gradeBar.style.top = U.clamp(y, 56, renderer.h - bh - 8) + 'px';
+  }
+
   /* =================== wheel & keyboard =================== */
 
   let spaceHeld = false;
@@ -2216,6 +2457,11 @@
     document.addEventListener('keydown', (e) => {
       if (!note) return;
       const inField = document.activeElement && (document.activeElement.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName));
+      if (recall && !inField && !e.metaKey && !e.ctrlKey) {
+        if (e.key === 'Escape') { exitRecall(); return; }
+        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); revealNext(); return; }
+        if (recall.focus && (e.key === '1' || e.key === '2')) { gradeFocused(e.key === '2'); return; }
+      }
       if (e.key === ' ') { if (!inField) { spaceHeld = true; e.preventDefault(); } return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         if (inField) return;
@@ -2238,6 +2484,7 @@
   /* =================== toolbar & popovers =================== */
 
   function setTool(name) {
+    exitRecall();
     cancelCrop();
     tool = name;
     el.wrap.dataset.tool = name;
@@ -2309,7 +2556,7 @@
 
   function renderPenBar() {
     if (!el.penBar) return;
-    const show = !!note && S.get('pens.showBar') !== false;
+    const show = !!note && !recall && S.get('pens.showBar') !== false;
     el.penBar.hidden = !show;
     if (!show) return;
     el.penBar.innerHTML = '';
@@ -2614,7 +2861,7 @@
   Editor.thumbnailFor = (n) => (renderer ? renderer.thumbnail(n) : Promise.resolve(null));
 
   // Introspection for tests/console; not used by the app itself.
-  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t, recording: !!rec, playback: playback ? { index: playback.index, paused: playback.audio.paused, time: playback.audio.currentTime } : null, replay: renderer && renderer.replay, liveSegments: rec && rec.transcript ? rec.transcript.length : 0, isolated: !!window.crossOriginIsolated, caption: el.liveCaption && !el.liveCaption.hidden ? el.liveCaption.textContent : null, transcribing: transcribing.size });
+  Editor._debug = () => ({ note, tool, selection, actionKind: action && action.kind, actionInfo: action ? { started: action.started, dx: action.dx, dy: action.dy } : null, undoLen: undoStack.length, redoLen: redoStack.length, t: renderer && renderer.t, recording: !!rec, playback: playback ? { index: playback.index, paused: playback.audio.paused, time: playback.audio.currentTime } : null, replay: renderer && renderer.replay, liveSegments: rec && rec.transcript ? rec.transcript.length : 0, isolated: !!window.crossOriginIsolated, caption: el.liveCaption && !el.liveCaption.hidden ? el.liveCaption.textContent : null, transcribing: transcribing.size, recall: recall ? { cards: recall.cards.map((c) => ({ id: c.id, x: c.x, y: c.y, w: c.w, h: c.h, due: c.due, isNew: c.isNew })), open: [...recall.open], focus: recall.focus, graded: [...recall.graded] } : null });
 
   window.BN = window.BN || {};
   window.BN.Editor = Editor;
