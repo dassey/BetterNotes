@@ -162,6 +162,7 @@
 
   function markDirty() {
     if (!note) return;
+    if (rec && rec.box) keepTranscriptBelow();
     updateExtent();
     autosave();
   }
@@ -613,9 +614,15 @@
     div.style.fontSize = item.size + 'px';
     div.style.color = renderer.inkColor(item.color);
     div.innerText = item.text || '';
+    if (item.transcript) div.classList.add('bn-transcript');
     let beforeText = null;
     let committed = !!(item.text && item.text.length);
-    div.addEventListener('focus', () => { beforeText = item.text || ''; div.classList.add('editing'); });
+    div.addEventListener('focus', () => {
+      const partial = div.querySelector('.bn-partial');
+      if (partial) partial.remove();
+      beforeText = item.text || '';
+      div.classList.add('editing');
+    });
     div.addEventListener('input', () => {
       item.text = div.innerText.replace(/\n$/, '');
       item.h = div.offsetHeight;
@@ -831,11 +838,11 @@
       if (r.live) clip.transcript = r.transcript || [];
       note.audio.push(clip);
       markDirty();
-      app.toast('Recording saved (' + fmtTime(duration) + ')');
+      app.toast(r.box && r.box.last ? 'Transcript added to your note · audio kept for replay' : 'Recording saved (' + fmtTime(duration) + ')');
       showAudioBar(note.audio.length - 1);
       if (r.live) finishLive(r, clip, note);
     } else {
-      if (r.live) r.live.stop().catch(() => { });
+      if (r.live) r.live.stop().catch(() => { }).then(() => { finishTranscriptBox(r); if (note === r.box?.note) markDirty(); });
       app.toast('Nothing was recorded');
     }
     if (r.resolve) r.resolve();
@@ -990,20 +997,159 @@
     if (!rec) return;
     const r = rec;
     r.transcript = [];
-    showCaption(BN.Transcribe.isReady() ? { state: 'ready' } : { state: 'loading', pct: 0 });
-    r.liveUnsub = BN.Transcribe.onStatus((st) => { if (rec === r) showCaption(st); });
+    if (S.get('audio.transcriptBox') !== false) {
+      startTranscriptBox(r);
+      app.toast('Transcribing into a text box below your notes — keep writing');
+    }
+    liveStatus(r, BN.Transcribe.isReady() ? { state: 'ready' } : { state: 'loading', pct: 0 });
+    r.liveUnsub = BN.Transcribe.onStatus((st) => { if (rec === r) liveStatus(r, st); });
     const list = r.transcript;
     r.live = BN.Transcribe.createLiveSession(stream, {
       startedAt: r.startedAt,
-      onPartial: (text) => { if (rec === r && text) showCaption({ state: 'partial', text }); },
-      onSegment: (seg) => { list.push(seg); if (rec === r) showCaption({ state: 'text', text: seg.text }); }
+      onPartial: (text) => { if (text) liveStatus(r, { state: 'partial', text }); },
+      onSegment: (seg) => {
+        list.push(seg);
+        if (r.box) appendToTranscript(r.box, seg);
+        liveStatus(r, { state: 'text', text: seg.text });
+      }
     });
-    r.live.ready.catch((e) => { if (rec === r) showCaption({ state: 'error', message: 'Transcription unavailable: ' + ((e && e.message) || e) }); });
+    r.live.ready.catch((e) => { if (rec === r) liveStatus(r, { state: 'error', message: 'Transcription unavailable: ' + ((e && e.message) || e) }); });
+  }
+
+  // Speech status goes into the transcript box when it is on screen, else the caption strip.
+  function liveStatus(r, st) {
+    const b = r.box;
+    if (b && !b.dead) {
+      if (st.state === 'partial') setTranscriptPartial(b, st.text);
+      else if (st.state === 'ready') setTranscriptPartial(b, b.last ? '' : 'Listening…');
+      else if (st.state === 'loading') setTranscriptPartial(b, st.pct ? `Downloading speech model · ${st.pct}%` : 'Preparing speech recognition…');
+      else if (st.state === 'text') setTranscriptPartial(b, '');
+      else if (st.state === 'error') setTranscriptPartial(b, st.message || 'Transcription failed');
+      if (rec !== r) return;
+      if (st.state !== 'error' && transcriptOnScreen(b)) { showCaption({ state: 'idle' }); return; }
+    }
+    if (rec === r) showCaption(st);
+  }
+
+  /* ---- transcript box: what is said is typed onto the page while you keep writing ---- */
+
+  // The box sits below your notes and follows them down as you write. It is filled in
+  // without ever taking focus, so the pen, fingers and every tool keep working.
+  const TRANSCRIPT_GAP = 36;
+
+  function lowestContentBeside(box, items) {
+    let bottom = -Infinity;
+    for (const it of items) {
+      if (it === box) continue;
+      const bb = BN.itemBBox(it);
+      if (bb.x > box.x + box.w || bb.x + bb.w < box.x) continue;
+      bottom = Math.max(bottom, bb.y + bb.h);
+    }
+    return bottom;
+  }
+
+  function startTranscriptBox(r) {
+    const size = 16;
+    const inf = isInfinite();
+    const view = renderer.viewWorldRect(0);
+    let x, w;
+    if (inf) {
+      x = contentBB ? contentBB.x : view.x + 40 / renderer.t.s;
+      w = U.clamp(contentBB ? contentBB.w : 640, 420, 760);
+    } else {
+      x = Math.min(56, Math.round(note.width * 0.07));
+      w = note.width - x * 2;
+    }
+    const when = new Date(r.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const item = {
+      id: U.uid(), type: 'text', x, y: 0, w, h: size * 1.5, size, color: '#4a4a58',
+      text: '🎙 Transcript · ' + when, transcript: r.clipId
+    };
+    const below = lowestContentBeside(item, note.items);
+    item.y = Math.round(below === -Infinity ? (inf ? view.y + 60 / renderer.t.s : 48) : below + TRANSCRIPT_GAP);
+    note.items.push(item); // not an undo step: a two-finger undo should never take the transcript away
+    buildTextEl(item);
+    r.box = { item, note, x: item.x, y: item.y, last: null, pinned: false, dead: false };
+    markDirty();
+  }
+
+  // Keep the box just below everything written beside it — unless the user has moved it.
+  function keepTranscriptBelow() {
+    const b = rec.box;
+    if (b.dead || b.pinned || b.note !== note) return;
+    const it = b.item;
+    if (!note.items.includes(it)) return;
+    if (it.x !== b.x || it.y !== b.y) { b.pinned = true; return; }
+    const below = lowestContentBeside(it, note.items);
+    if (below + TRANSCRIPT_GAP / 2 <= it.y) return;
+    it.y = b.y = Math.round(below + TRANSCRIPT_GAP);
+    delete it._bb;
+    const div = transcriptDiv(b);
+    if (div) div.style.top = it.y + 'px';
+  }
+
+  function transcriptDiv(b) {
+    return b.note === note ? el.textLayer.querySelector(`[data-id="${b.item.id}"]`) : null;
+  }
+
+  function transcriptOnScreen(b) {
+    if (b.dead || b.note !== note || !note.items.includes(b.item)) return false;
+    const bb = BN.itemBBox(b.item);
+    const v = renderer.viewWorldRect(0);
+    const end = bb.y + bb.h; // new words appear at the bottom edge
+    return end > v.y && end < v.y + v.h && bb.x < v.x + v.w && bb.x + bb.w > v.x;
+  }
+
+  function appendToTranscript(b, seg) {
+    if (b.dead) return;
+    const it = b.item;
+    if (!b.note.items.includes(it)) { b.dead = true; return; } // deleted by the user: stop writing
+    const text = String(seg.text || '').trim();
+    if (!text) return;
+    const sep = !b.last ? '\n' : (seg.t0 - b.last.t1 > 2500 ? '\n\n' : ' ');
+    b.last = seg;
+    it.text = (it.text || '') + sep + text;
+    delete it._bb;
+    const div = transcriptDiv(b);
+    if (div) {
+      const partial = div.querySelector('.bn-partial');
+      if (partial) partial.remove();
+      div.appendChild(document.createTextNode(sep + text)); // no focus, caret left where it was
+      it.h = div.offsetHeight;
+      markDirty();
+    }
+  }
+
+  function setTranscriptPartial(b, text) {
+    const div = transcriptDiv(b);
+    if (!div) return;
+    let span = div.querySelector('.bn-partial');
+    if (!text || document.activeElement === div) { if (span) span.remove(); return; }
+    if (!span) {
+      span = document.createElement('span');
+      span.className = 'bn-partial';
+      span.contentEditable = 'false';
+      div.appendChild(span);
+    }
+    span.textContent = (b.last ? ' ' : '\n') + text;
+  }
+
+  // Recording over: drop the status line, and the box itself if nothing was said.
+  function finishTranscriptBox(r) {
+    const b = r.box;
+    if (!b) return;
+    setTranscriptPartial(b, '');
+    if (b.last || b.dead) return;
+    const i = b.note.items.indexOf(b.item);
+    if (i >= 0) b.note.items.splice(i, 1);
+    const div = transcriptDiv(b);
+    if (div) div.remove();
   }
 
   function finishLive(r, clip, noteRef) {
     r.live.stop().then((segs) => {
       clip.transcript = segs;
+      finishTranscriptBox(r);
       if (note === noteRef) {
         markDirty();
         updateTranscriptButton();

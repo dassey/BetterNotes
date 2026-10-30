@@ -133,8 +133,12 @@
       desc: 'Each language has its own model.'
     },
     {
+      key: 'audio.transcriptBox', label: 'Type speech into the note', type: 'toggle', def: true,
+      desc: 'While recording, what is said is typed into a text box below your notes. It moves down as you keep writing, never takes the keyboard, and afterwards you can edit, move or Recall-highlight it like any text.'
+    },
+    {
       key: 'audio.liveCaptions', label: 'Live captions while recording', type: 'toggle', def: true,
-      desc: 'Shows what was just said in a strip at the bottom of the page. Transcription still runs when this is off.'
+      desc: 'Shows what was just said in a strip at the bottom of the page whenever the transcript box is out of view (or turned off). Transcription still runs when this is off.'
     },
     { action: 'removeModels', label: 'Delete downloaded speech model…', desc: 'Frees the storage used by the speech model and its runtime. They download again the next time transcription is used.' },
     { info: 'Ink written while recording is time-stamped: during playback it dims until its moment, and tapping it with the hand tool jumps the audio there.' },

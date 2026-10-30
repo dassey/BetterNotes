@@ -994,3 +994,7 @@ input.swatch.custom::-webkit-color-swatch { border: none; opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .rc-card::before, #recallBar, #gradeBar, #home-review { transition: none; animation: none; }
 }
+
+/* ============ transcript box (speech typed into the note) ============ */
+.bn-transcript { box-shadow: -9px 0 0 -6px color-mix(in srgb, var(--accent) 60%, transparent); }
+.bn-partial { opacity: 0.5; font-style: italic; }
